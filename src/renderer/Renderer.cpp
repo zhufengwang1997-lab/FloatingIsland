@@ -442,7 +442,8 @@ void Renderer::drawFrame(const Camera& camera) {
     uniforms.sunDirection = glm::vec4(glm::normalize(sunDirection), 0.0f);
     uniforms.sunColor = glm::vec4(sunColor, 0.0f);
     uniforms.params = glm::vec4(exposure, 1.0f / static_cast<float>(kShadowMapSize),
-                                static_cast<float>(glfwGetTime() - startTime_), windStrength);
+                                timeOverride >= 0.0f ? timeOverride : static_cast<float>(glfwGetTime() - startTime_),
+                                windStrength);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
     VK_CHECK(vmaFlushAllocation(ctx_->allocator, frame.uniforms.allocation, 0, sizeof(uniforms)));
 

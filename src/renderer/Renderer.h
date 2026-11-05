@@ -64,6 +64,8 @@ public:
     float shadowBiasConstant = 1.25f;
     float shadowBiasSlope = 2.0f;
     float windStrength = 1.0f;
+    // >= 0: use this as the animation time (seconds) instead of the clock, for repeatable benchmarks.
+    float timeOverride = -1.0f;
 
     // Objects, for the debug UI.
     uint32_t objectCount() const { return static_cast<uint32_t>(objects_.size()); }

@@ -30,6 +30,10 @@ public:
     bool supported() const { return supported_; }
     // Exponentially smoothed GPU time of the scope, in milliseconds.
     float milliseconds(GpuScope scope) const { return smoothedMs_[static_cast<uint32_t>(scope)]; }
+    // Unsmoothed time of the scope in the most recently collected frame (a frame or two behind).
+    float lastMilliseconds(GpuScope scope) const { return lastMs_[static_cast<uint32_t>(scope)]; }
+    // Increments every time a frame's results are collected, so callers can tell new samples apart.
+    uint64_t sampleCount() const { return sampleCount_; }
 
 private:
     static constexpr uint32_t kScopes = static_cast<uint32_t>(GpuScope::Count);
@@ -44,4 +48,6 @@ private:
     uint64_t validMask_ = ~0ull;
     bool used_[kSlots][kScopes]{};  // scope was written in the slot's last frame
     float smoothedMs_[kScopes]{};
+    float lastMs_[kScopes]{};
+    uint64_t sampleCount_ = 0;
 };

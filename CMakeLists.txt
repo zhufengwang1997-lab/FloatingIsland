@@ -102,6 +102,7 @@ add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 add_executable(FloatingIsland
   src/main.cpp
   src/app/App.cpp
+  src/app/Benchmark.cpp
   src/app/DebugUi.cpp
   src/rhi/VulkanContext.cpp
   src/rhi/Swapchain.cpp

@@ -29,6 +29,14 @@ ninja -C build
 ./build/FloatingIsland --frames 600 --no-vsync              # 关闭垂直同步跑 600 帧，退出时打印各 Pass 的 GPU 耗时
 ```
 
+性能基准测试（固定相机路径，用 Release 构建，结果记录在 `docs/perf-log.md`）：
+
+```bash
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+ninja -C build-release
+./build-release/FloatingIsland --benchmark 3000 --csv out.csv
+```
+
 操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速；F1 显示 / 隐藏调试面板。
 
 调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
@@ -67,4 +75,4 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 ## 文档
 
 - 详细设计说明：见项目设计文档
-- 性能优化记录：`docs/perf-log.md`（开发中补充）
+- 性能优化记录：`docs/perf-log.md`

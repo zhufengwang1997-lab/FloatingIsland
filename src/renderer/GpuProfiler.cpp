@@ -52,14 +52,18 @@ void GpuProfiler::collect(VkDevice device, uint32_t slot) {
     const VkResult r = vkGetQueryPoolResults(device, pool_, slot * kQueriesPerSlot, kQueriesPerSlot,
                                              sizeof(ticks), ticks, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
     if (r != VK_SUCCESS && r != VK_NOT_READY) VK_CHECK(r);
+    if (r != VK_SUCCESS) return;
     for (uint32_t s = 0; s < kScopes; ++s) {
-        if (!used_[slot][s] || r != VK_SUCCESS) continue;
+        lastMs_[s] = 0.0f;
+        if (!used_[slot][s]) continue;
         const uint64_t begin = ticks[s * 2] & validMask_;
         const uint64_t end = ticks[s * 2 + 1] & validMask_;
         if (end < begin) continue;  // counter wrapped; skip this sample
         const float ms = static_cast<float>(static_cast<double>(end - begin) * nsPerTick_ * 1e-6);
+        lastMs_[s] = ms;
         smoothedMs_[s] = smoothedMs_[s] == 0.0f ? ms : smoothedMs_[s] * 0.95f + ms * 0.05f;
     }
+    ++sampleCount_;
 }
 
 void GpuProfiler::reset(VkCommandBuffer cmd, uint32_t slot) {

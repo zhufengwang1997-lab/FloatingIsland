@@ -2,6 +2,7 @@
 build/
 out/
 cmake-build-*/
+build-*/
 
 # Compiled shaders (generated from shaders/*.hlsl at build time)
 *.spv

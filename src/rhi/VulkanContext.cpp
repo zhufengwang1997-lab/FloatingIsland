@@ -11,7 +11,9 @@
 
 namespace {
 
+#ifdef FI_ENABLE_VALIDATION
 constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
+#endif
 // Defined in vulkan_beta.h; spelled out so we don't need VK_ENABLE_BETA_EXTENSIONS.
 constexpr const char* kPortabilitySubsetExtension = "VK_KHR_portability_subset";
 
@@ -30,6 +32,7 @@ std::vector<VkExtensionProperties> deviceExtensions(VkPhysicalDevice pd) {
     return list;
 }
 
+#ifdef FI_ENABLE_VALIDATION
 bool hasInstanceLayer(const char* name) {
     uint32_t count = 0;
     vkEnumerateInstanceLayerProperties(&count, nullptr);
@@ -40,6 +43,7 @@ bool hasInstanceLayer(const char* name) {
     }
     return false;
 }
+#endif
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                              VkDebugUtilsMessageTypeFlagsEXT,

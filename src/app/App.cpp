@@ -13,9 +13,18 @@
 #include <cstdio>
 #include <stdexcept>
 
-void App::run(int maxFrames, const std::string& screenshotPath, bool vsync) {
-    init(vsync);
-    mainLoop(maxFrames, screenshotPath);
+void App::run(const AppOptions& options) {
+    if (options.benchmarkFrames > 0) {
+        // Uncapped frame rate and no UI, so the numbers measure the scene.
+        Benchmark benchmark(options.benchmarkFrames, options.benchmarkCsv);
+        init(false);
+        ui_.visible = false;
+        mainLoop(benchmark.totalFrames(), options.screenshotPath, &benchmark);
+        benchmark.report();
+    } else {
+        init(options.vsync);
+        mainLoop(options.maxFrames, options.screenshotPath, nullptr);
+    }
     shutdown();
 }
 
@@ -81,7 +90,7 @@ void App::loadScene() {
     std::fflush(stdout);
 }
 
-void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
+void App::mainLoop(int maxFrames, const std::string& screenshotPath, Benchmark* benchmark) {
     double lastTitleUpdate = glfwGetTime();
     double lastFrame = lastTitleUpdate;
     int frames = 0;
@@ -94,10 +103,16 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
         const double frameStart = glfwGetTime();
         const float dt = static_cast<float>(frameStart - lastFrame);
         lastFrame = frameStart;
-        if (!ui_.wantsInput()) camera_.update(window_, dt);
+        if (benchmark) {
+            benchmark->pose(totalFrames, camera_);
+            renderer_.timeOverride = Benchmark::animationTime(totalFrames);
+        } else if (!ui_.wantsInput()) {
+            camera_.update(window_, dt);
+        }
         ui_.build(renderer_, camera_, dt * 1000.0f);
         if (!screenshotPath.empty() && totalFrames + 1 == maxFrames) renderer_.requestCapture(screenshotPath);
         renderer_.drawFrame(camera_);
+        if (benchmark) benchmark->record(totalFrames, dt * 1000.0f, renderer_.profiler());
         if (++totalFrames == kWarmupFrames) measureStart = glfwGetTime();
         if (maxFrames > 0 && totalFrames >= maxFrames) break;
 
@@ -116,12 +131,12 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
     }
 
     // Averages for automated runs (--frames), so measurements can be compared between commits.
-    if (maxFrames > kWarmupFrames) {
+    if (maxFrames > kWarmupFrames && !benchmark) {
         const double ms = 1000.0 * (glfwGetTime() - measureStart) / (totalFrames - kWarmupFrames);
         std::printf("CPU frame (avg after warm-up): %.2f ms (%.0f fps)\n", ms, 1000.0 / ms);
     }
     const GpuProfiler& gpu = renderer_.profiler();
-    if (maxFrames > 0 && gpu.supported()) {
+    if (maxFrames > 0 && gpu.supported() && !benchmark) {
         std::printf("GPU ms (smoothed): frame %.3f | shadow %.3f | main %.3f | composite %.3f | ui %.3f\n",
                     gpu.milliseconds(GpuScope::Frame), gpu.milliseconds(GpuScope::Shadow),
                     gpu.milliseconds(GpuScope::Main), gpu.milliseconds(GpuScope::Composite),

@@ -1,17 +1,20 @@
 #include "app/App.h"
 
 #include "scene/IslandMesh.h"
+#include "scene/Primitives.h"
 
 #include <vulkan/vulkan.h>
 
 #include <GLFW/glfw3.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <cstdio>
 #include <stdexcept>
 
-void App::run(int maxFrames) {
+void App::run(int maxFrames, const std::string& screenshotPath) {
     init();
-    mainLoop(maxFrames);
+    mainLoop(maxFrames, screenshotPath);
     shutdown();
 }
 
@@ -35,10 +38,33 @@ void App::init() {
 
     ctx_.init(window_);
     renderer_.init(ctx_, window_);
-    renderer_.loadMesh(generateIsland());
+    loadScene();
 }
 
-void App::mainLoop(int maxFrames) {
+void App::loadScene() {
+    const MeshData island = generateIsland();
+    std::printf("Island: %zu vertices, %zu triangles\n", island.vertices.size(), island.indices.size() / 3);
+    renderer_.addObject(island);
+
+    // Material test spheres floating above the island: roughness 0.1 -> 0.9 from left to right,
+    // red plastic on the lower row, gold on the upper row.
+    const glm::vec3 plastic{0.80f, 0.12f, 0.10f};
+    const glm::vec3 gold{1.00f, 0.78f, 0.34f};
+    for (int i = 0; i < 5; ++i) {
+        const float roughness = 0.1f + 0.2f * static_cast<float>(i);
+        const float x = -16.0f + 8.0f * static_cast<float>(i);
+        renderer_.addObject(generateSphere(2.5f, 48, 24, plastic, roughness, 0.0f),
+                            glm::translate(glm::mat4(1.0f), {x, 20.0f, 20.0f}));
+        renderer_.addObject(generateSphere(2.5f, 48, 24, gold, roughness, 1.0f),
+                            glm::translate(glm::mat4(1.0f), {x, 27.0f, 20.0f}));
+    }
+
+    // Everything above fits in this sphere, so it all casts and receives shadows.
+    renderer_.setShadowBounds({0.0f, -5.0f, 0.0f}, 52.0f);
+    std::fflush(stdout);
+}
+
+void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
     double lastTitleUpdate = glfwGetTime();
     double lastFrame = lastTitleUpdate;
     int frames = 0;
@@ -48,6 +74,7 @@ void App::mainLoop(int maxFrames) {
         const double frameStart = glfwGetTime();
         camera_.update(window_, static_cast<float>(frameStart - lastFrame));
         lastFrame = frameStart;
+        if (!screenshotPath.empty() && totalFrames + 1 == maxFrames) renderer_.requestCapture(screenshotPath);
         renderer_.drawFrame(camera_);
         if (maxFrames > 0 && ++totalFrames >= maxFrames) break;
 

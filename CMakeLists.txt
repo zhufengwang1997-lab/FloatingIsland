@@ -50,6 +50,8 @@ find_program(DXC_EXECUTABLE dxc
 # and becomes build/shaders/<name>.vs.spv and <name>.ps.spv
 # ---------------------------------------------------------------------------
 set(SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+# Shared includes: editing one recompiles every shader.
+file(GLOB SHADER_HEADERS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.hlsli")
 set(SHADER_OUTPUTS "")
 
 function(add_hlsl_shader source stage entry)
@@ -60,9 +62,10 @@ function(add_hlsl_shader source stage entry)
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUT_DIR}"
     COMMAND "${DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3
             -T ${stage}_6_0 -E ${entry}
+            -I "${CMAKE_SOURCE_DIR}/shaders"
             "$<IF:$<CONFIG:Debug>,-Zi;-Od,-O3>"
             -Fo "${output}" "${CMAKE_SOURCE_DIR}/${source}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/${source}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/${source}" ${SHADER_HEADERS}
     COMMENT "DXC ${source} (${entry}) -> ${name}.${stage}.spv"
     COMMAND_EXPAND_LISTS
     VERBATIM)
@@ -71,6 +74,7 @@ endfunction()
 
 add_hlsl_shader(shaders/mesh.hlsl vs VSMain)
 add_hlsl_shader(shaders/mesh.hlsl ps PSMain)
+add_hlsl_shader(shaders/shadow.hlsl vs VSMain)
 add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 
 # ---------------------------------------------------------------------------
@@ -82,10 +86,12 @@ add_executable(FloatingIsland
   src/rhi/VulkanContext.cpp
   src/rhi/Swapchain.cpp
   src/rhi/Resources.cpp
+  src/rhi/Pipeline.cpp
   src/rhi/VmaImpl.cpp
   src/renderer/Renderer.cpp
   src/scene/Camera.cpp
-  src/scene/IslandMesh.cpp)
+  src/scene/IslandMesh.cpp
+  src/scene/Primitives.cpp)
 
 add_dependencies(FloatingIsland shaders)
 target_include_directories(FloatingIsland PRIVATE src)

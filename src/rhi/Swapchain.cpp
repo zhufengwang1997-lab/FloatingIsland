@@ -57,6 +57,8 @@ void Swapchain::create(const VulkanContext& ctx, VkExtent2D framebufferSize) {
     info.imageExtent = extent;
     info.imageArrayLayers = 1;
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // Lets the renderer copy a frame out for screenshots.
+    if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.preTransform = caps.currentTransform;
     info.compositeAlpha = chooseCompositeAlpha(caps.supportedCompositeAlpha);

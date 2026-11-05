@@ -102,16 +102,23 @@ void addLayer(MeshData& mesh, const IslandParams& p, bool top) {
             if (!inside(i, j)) continue;
             const float x = gridX(i), z = gridX(j), r = rn[j * side + i];
             // Coast vertices sit at y = 0 in both layers so the top and the underside meet exactly.
-            const bool coast = !inside(i - 1, j) || !inside(i + 1, j) || !inside(i, j - 1) || !inside(i, j + 1);
+            // All 8 neighbours count: a cell with an outside corner loses both triangles, and its
+            // diagonal corner then lies on the mesh border too.
+            bool coast = false;
+            for (int dj = -1; dj <= 1; ++dj)
+                for (int di = -1; di <= 1; ++di) coast = coast || !inside(i + di, j + dj);
             Vertex v{};
             if (top) {
                 const float h = coast ? 0.0f : topHeight(x, z, r, p);
                 v.position = {x, h, z};
                 v.color = topColor(h, coast ? 1.0f : r, p);
+                // Grass and sand are very rough; exposed rock on the peaks a little less so.
+                v.material = {glm::mix(0.9f, 0.65f, glm::smoothstep(0.65f, 0.85f, h / p.maxHeight)), 0.0f};
             } else {
                 const float d = coast ? 0.0f : bottomDepth(x, z, r, p);
                 v.position = {x, -d, z};
                 v.color = bottomColor(d, p);
+                v.material = {0.85f, 0.0f};
             }
             index[j * side + i] = static_cast<int32_t>(mesh.vertices.size());
             mesh.vertices.push_back(v);

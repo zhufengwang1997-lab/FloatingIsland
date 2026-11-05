@@ -24,7 +24,8 @@
 ```bash
 cmake -S . -B build -G Ninja      # 默认 Debug，开启验证层
 ninja -C build
-./build/FloatingIsland            # Esc 退出；--frames N 跑 N 帧后自动退出
+./build/FloatingIsland            # Esc 退出
+./build/FloatingIsland --frames 120 --screenshot shot.ppm   # 跑 120 帧，保存最后一帧后退出
 ```
 
 操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速。
@@ -40,10 +41,17 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 | 目录 | 内容 |
 | --- | --- |
 | `src/app` | 窗口与主循环 |
-| `src/rhi` | Vulkan 底层封装：Instance / Device / 队列 / VMA（`VulkanContext`）、交换链（`Swapchain`）、Buffer 与 Image（`Resources`） |
-| `src/renderer` | 每帧的命令录制、同步与提交（`Renderer`） |
-| `src/scene` | 相机（`Camera`）、程序化生成的浮空岛网格（`IslandMesh`） |
-| `shaders` | HLSL Shader，构建时由 DXC 编译到 `build/shaders/*.spv` |
+| `src/rhi` | Vulkan 底层封装：Instance / Device / 队列 / VMA（`VulkanContext`）、交换链（`Swapchain`）、Buffer 与 Image（`Resources`）、Pipeline 构建（`Pipeline`） |
+| `src/renderer` | 每帧的命令录制、同步与提交：阴影 Pass + 主 Pass（`Renderer`） |
+| `src/scene` | 相机（`Camera`）、程序化生成的浮空岛网格（`IslandMesh`）、基础几何体（`Primitives`） |
+| `shaders` | HLSL Shader，构建时由 DXC 编译到 `build/shaders/*.spv`；`common.hlsli` 为共享的资源绑定定义 |
+
+## 渲染流程（每帧）
+
+1. **阴影 Pass**：从太阳方向用正交投影渲染场景深度到 2048² 阴影贴图（深度偏移防止自阴影）。
+2. **主 Pass**：GGX / Smith / Schlick 的金属度-粗糙度 PBR，3×3 PCF 阴影，半球环境光，ACES 色调映射，输出到 sRGB 交换链。
+
+资源绑定：Set 0 = 每帧 Uniform Buffer（相机、光源矩阵）+ 阴影贴图（比较采样器）；Push Constant = 每个物体的模型矩阵。
 
 ## 文档
 

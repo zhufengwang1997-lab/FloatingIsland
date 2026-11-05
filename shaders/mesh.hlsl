@@ -1,47 +1,131 @@
-// Lit, vertex-coloured mesh: one sun plus a sky/ground ambient term.
+// Physically based shading (metallic-roughness, GGX) for one directional sun light,
+// with a PCF shadow map, hemisphere ambient and ACES tonemapping.
+#include "common.hlsli"
 
-struct PushConstants
-{
-    float4x4 viewProj;      // GLM column-major matrix; HLSL's default column_major packing matches
-    float4 sunDirection;    // xyz: unit vector pointing towards the sun
-};
-[[vk::push_constant]] PushConstants pc;
+[[vk::combinedImageSampler]][[vk::binding(1, 0)]] Texture2D<float> shadowMap;
+[[vk::combinedImageSampler]][[vk::binding(1, 0)]] SamplerComparisonState shadowSampler;
+
+static const float PI = 3.14159265;
 
 struct VSInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float3 normal : NORMAL;
     [[vk::location(2)]] float3 color : COLOR;
+    [[vk::location(3)]] float2 material : MATERIAL;   // x: roughness, y: metallic
 };
 
 struct VSOutput
 {
     float4 position : SV_Position;
-    [[vk::location(0)]] float3 normal : NORMAL;
-    [[vk::location(1)]] float3 color : COLOR;
+    [[vk::location(0)]] float3 worldPos : POSITION;
+    [[vk::location(1)]] float3 normal : NORMAL;
+    [[vk::location(2)]] float3 color : COLOR;
+    [[vk::location(3)]] float2 material : MATERIAL;
 };
 
 VSOutput VSMain(VSInput input)
 {
+    float4 world = mul(object.model, float4(input.position, 1.0));
     VSOutput output;
-    output.position = mul(pc.viewProj, float4(input.position, 1.0));
-    output.normal = input.normal;
+    output.position = mul(frame.viewProj, world);
+    output.worldPos = world.xyz;
+    output.normal = mul((float3x3)object.model, input.normal);  // fine while models use uniform scale
     output.color = input.color;
+    output.material = input.material;
     return output;
+}
+
+// ---- BRDF (Cook-Torrance) ----------------------------------------------------
+
+// Normal distribution: how many microfacets face the half vector.
+float D_GGX(float NoH, float a)
+{
+    float a2 = a * a;
+    float d = NoH * NoH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+// Height-correlated Smith visibility, already divided by 4 * NoL * NoV.
+float V_SmithGGXCorrelated(float NoV, float NoL, float a)
+{
+    float a2 = a * a;
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / (gv + gl);
+}
+
+float3 F_Schlick(float VoH, float3 f0)
+{
+    return f0 + (1.0 - f0) * pow(1.0 - VoH, 5.0);
+}
+
+// ---- Shadows -----------------------------------------------------------------
+
+// 3x3 PCF; each tap is itself a 2x2 hardware-filtered comparison. 1 = lit, 0 = in shadow.
+float SunShadow(float3 worldPos)
+{
+    float4 clip = mul(frame.lightViewProj, float4(worldPos, 1.0));
+    float3 ndc = clip.xyz / clip.w;
+    float2 uv = ndc.xy * 0.5 + 0.5;   // no Y flip: the shadow pass uses the same convention
+    if (any(uv < 0.0) || any(uv > 1.0) || ndc.z > 1.0)
+        return 1.0;                   // outside the shadow map: assume lit
+
+    float texel = frame.params.y;
+    float sum = 0.0;
+    [unroll] for (int y = -1; y <= 1; ++y)
+        [unroll] for (int x = -1; x <= 1; ++x)
+            sum += shadowMap.SampleCmpLevelZero(shadowSampler, uv + float2(x, y) * texel, ndc.z);
+    return sum / 9.0;
+}
+
+// ---- Tonemapping -------------------------------------------------------------
+
+// Narkowicz's fit of the ACES filmic curve: HDR radiance -> [0, 1].
+float3 ACESFilm(float3 x)
+{
+    return saturate((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
+}
+
+float3 Hemisphere(float3 dir)
+{
+    float3 sky = float3(0.35, 0.50, 0.75);
+    float3 ground = float3(0.18, 0.14, 0.10);
+    return lerp(ground, sky, dir.y * 0.5 + 0.5);
 }
 
 float4 PSMain(VSOutput input) : SV_Target0
 {
-    float3 n = normalize(input.normal);
-    float3 l = normalize(pc.sunDirection.xyz);
+    float3 albedo = input.color;
+    float roughness = clamp(input.material.x, 0.045, 1.0);
+    float metallic = input.material.y;
 
-    float diffuse = saturate(dot(n, l));
-    float3 sunColor = float3(1.0, 0.95, 0.85) * 1.2;
+    float3 N = normalize(input.normal);
+    float3 V = normalize(frame.cameraPosition.xyz - input.worldPos);
+    float3 L = normalize(frame.sunDirection.xyz);
+    float3 H = normalize(V + L);
+    float NoV = max(dot(N, V), 1e-4);
+    float NoL = saturate(dot(N, L));
+    float NoH = saturate(dot(N, H));
+    float VoH = saturate(dot(V, H));
 
-    // Hemisphere ambient: surfaces facing up see the sky, facing down see bounce light.
-    float3 skyAmbient = float3(0.35, 0.50, 0.75);
-    float3 groundAmbient = float3(0.18, 0.14, 0.10);
-    float3 ambient = lerp(groundAmbient, skyAmbient, n.y * 0.5 + 0.5) * 0.4;
+    // Metals have no diffuse and tint their reflection; dielectrics reflect ~4%.
+    float3 f0 = lerp(0.04, albedo, metallic);
+    float3 diffuseColor = albedo * (1.0 - metallic);
 
-    return float4(input.color * (ambient + sunColor * diffuse), 1.0);
+    float a = roughness * roughness;
+    float3 F = F_Schlick(VoH, f0);
+    float3 specular = D_GGX(NoH, a) * V_SmithGGXCorrelated(NoV, NoL, a) * F;
+    float3 diffuse = diffuseColor / PI;
+
+    float shadow = NoL > 0.0 ? SunShadow(input.worldPos) : 0.0;
+    float3 direct = (diffuse + specular) * frame.sunColor.rgb * NoL * shadow;
+
+    // Stand-in for image-based lighting until the sky gets a proper environment map.
+    float3 R = reflect(-V, N);
+    float3 ambient = Hemisphere(N) * diffuseColor * 0.6
+                   + Hemisphere(R) * f0 * (1.0 - roughness * 0.7) * 0.6;
+
+    float3 color = (direct + ambient) * frame.params.x;
+    return float4(ACESFilm(color), 1.0);   // the sRGB swapchain applies gamma
 }

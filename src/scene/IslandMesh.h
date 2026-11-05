@@ -1,20 +1,6 @@
 #pragma once
 
-#include <glm/glm.hpp>
-
-#include <cstdint>
-#include <vector>
-
-struct Vertex {
-    glm::vec3 position;
-    glm::vec3 normal;
-    glm::vec3 color;
-};
-
-struct MeshData {
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-};
+#include "scene/Mesh.h"
 
 struct IslandParams {
     float radius = 40.0f;     // rough island radius in world units

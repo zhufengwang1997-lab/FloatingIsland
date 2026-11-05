@@ -68,7 +68,9 @@ void App::init(bool vsync, const AppOptions& options) {
 void App::loadScene(const AppOptions& options) {
     const MeshData island = generateIsland();
     std::printf("Island: %zu vertices, %zu triangles\n", island.vertices.size(), island.indices.size() / 3);
-    renderer_.addObject(island, glm::mat4(1.0f), "Island");
+    // In 8 x 8 tiles (like the vegetation chunks), so the parts out of view can be culled.
+    const uint32_t islandIndex = renderer_.addObject(island, glm::mat4(1.0f), "Island", 8.0f);
+    std::printf("Island: %u tiles\n", renderer_.objectChunks(islandIndex));
 
     // Vegetation: one instanced draw call per kind.
     for (const VegetationKind& kind : generateVegetation({}, 11, options.grassDensity)) {

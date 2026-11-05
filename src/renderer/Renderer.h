@@ -28,8 +28,10 @@ struct GpuMesh {
 struct FrameStats {
     uint32_t drawCalls = 0;
     uint64_t triangles = 0;
-    uint32_t chunksVisible = 0;  // main pass, after frustum culling
     uint32_t chunksTotal = 0;
+    uint32_t chunksVisible = 0;        // drawn in the main pass, after frustum culling
+    uint32_t shadowChunksVisible = 0;  // drawn in the shadow pass (of the chunks that cast shadows)
+    uint32_t shadowChunksTotal = 0;
 };
 
 // Draws the scene in four passes per frame:
@@ -44,8 +46,11 @@ class Renderer {
 public:
     void init(VulkanContext& ctx, GLFWwindow* window);
     void shutdown();
-    // Adds a mesh drawn once. Returns its object index.
-    uint32_t addObject(const MeshData& mesh, const glm::mat4& model = glm::mat4(1.0f), std::string name = {});
+    // Adds a mesh drawn once. tileSize > 0 splits its triangles into square tiles of that many world
+    // units (by where they are on the XZ plane), each culled on its own; for large meshes such as the
+    // island. Returns its object index.
+    uint32_t addObject(const MeshData& mesh, const glm::mat4& model = glm::mat4(1.0f), std::string name = {},
+                       float tileSize = 0.0f);
     // Adds a mesh drawn once per instance. twoSided disables back-face culling (thin geometry such as
     // grass blades). The instances are grouped into square chunks of chunkSize world units; the main
     // pass draws only the chunks inside the camera frustum. Returns its object index.
@@ -73,7 +78,8 @@ public:
     // Benchmarks: record the shadow and main passes this many times per frame, so the GPU stays fully
     // busy (and at a steady clock). The output is the same; timings are totals over all repeats.
     uint32_t sceneRepeat = 1;
-    // Skip chunks outside the camera frustum in the main pass.
+    // Skip chunks outside the camera frustum in the main pass, and in the shadow pass the chunks
+    // whose shadow can't reach it.
     bool frustumCulling = true;
     // Debug: keep culling against the frustum of the moment this was switched on, so you can fly
     // out and look at what is (not) being drawn.
@@ -119,16 +125,20 @@ private:
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
     };
 
-    // A group of instances that are close together, tested against the frustum as one box.
-    struct InstanceChunk {
-        Aabb bounds;              // without wind sway
-        float swayReach = 0.0f;   // how far wind can move the geometry sideways, per unit of windStrength
+    // What one vkCmdDrawIndexed draws: some of the mesh's indices (a tile of a large mesh, or all of
+    // them) for some of its instances.
+    struct DrawRange {
+        uint32_t firstIndex = 0;
+        uint32_t indexCount = 0;
         uint32_t firstInstance = 0;
         uint32_t instanceCount = 0;
     };
-    struct InstanceRange {
-        uint32_t firstInstance = 0;
-        uint32_t instanceCount = 0;
+    // A piece of an object that is culled as one box: a group of instances that stand close
+    // together, or one tile of a large mesh.
+    struct Chunk {
+        Aabb bounds;              // without wind sway
+        float swayReach = 0.0f;   // how far wind can move the geometry sideways, per unit of windStrength
+        DrawRange range;
     };
 
     struct RenderObject {
@@ -141,10 +151,11 @@ private:
         bool visible = true;
         bool castsShadow = true;  // drawn into the shadow map
         std::string name;
-        // Instances sorted by chunk; objects drawn once have a single chunk.
-        std::vector<InstanceChunk> chunks;
-        // This frame's main-pass draws: runs of consecutive visible chunks, merged into one draw each.
-        std::vector<InstanceRange> visibleRanges;
+        // Instances (or triangles) sorted by chunk, so each chunk is one contiguous range.
+        std::vector<Chunk> chunks;
+        // This frame's draws: runs of neighbouring visible chunks, merged into one draw each.
+        std::vector<DrawRange> mainDraws;
+        std::vector<DrawRange> shadowDraws;
     };
 
     void createFrameResources();
@@ -160,7 +171,7 @@ private:
     glm::mat4 lightViewProj() const;
     // shadowPass: the caller has bound the shadow pipeline; otherwise pick mesh / foliage per object.
     void drawObjects(VkCommandBuffer cmd, bool shadowPass);
-    // Fills every object's visibleRanges for this frame's main pass.
+    // Fills every object's mainDraws and shadowDraws for this frame.
     void cullObjects(const glm::mat4& viewProj);
     void recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set);
     void recordMainPass(VkCommandBuffer cmd, VkDescriptorSet set);

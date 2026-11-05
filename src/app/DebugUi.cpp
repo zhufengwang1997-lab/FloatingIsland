@@ -126,7 +126,8 @@ void DebugUi::drawStats(const Renderer& renderer, const Camera& camera) {
     const FrameStats& stats = renderer.stats();
     const Swapchain& sc = renderer.swapchain();
     ImGui::Text("Draw calls  %u   Triangles %.2f M  (all passes)", stats.drawCalls, static_cast<double>(stats.triangles) / 1e6);
-    ImGui::Text("Chunks      %u / %u in view  (main pass)", stats.chunksVisible, stats.chunksTotal);
+    ImGui::Text("Chunks      main %u / %u   shadow %u / %u", stats.chunksVisible, stats.chunksTotal,
+                stats.shadowChunksVisible, stats.shadowChunksTotal);
     ImGui::Text("Swapchain   %ux%u, %zu images, %s", sc.extent.width, sc.extent.height, sc.images.size(),
                 presentModeName(sc.presentMode));
     ImGui::Text("Camera      (%.1f, %.1f, %.1f)", camera.position.x, camera.position.y, camera.position.z);

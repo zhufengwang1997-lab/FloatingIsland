@@ -114,19 +114,52 @@ void Renderer::shutdown() {
     swapchain_.destroy(device);
 }
 
-uint32_t Renderer::addObject(const MeshData& mesh, const glm::mat4& model, std::string name) {
+uint32_t Renderer::addObject(const MeshData& mesh, const glm::mat4& model, std::string name, float tileSize) {
     RenderObject o;
+    std::vector<uint32_t> indices = mesh.indices;
+    if (tileSize > 0.0f) {
+        // Sort the triangles by the tile their centre falls in, row by row; each tile becomes one
+        // contiguous range of the index buffer (drawn with firstIndex / indexCount).
+        const size_t triangles = indices.size() / 3;
+        std::vector<glm::ivec2> cell(triangles);
+        std::vector<uint32_t> order(triangles);
+        for (size_t t = 0; t < triangles; ++t) {
+            const glm::vec3 centre = (mesh.vertices[indices[3 * t]].position + mesh.vertices[indices[3 * t + 1]].position +
+                                      mesh.vertices[indices[3 * t + 2]].position) / 3.0f;
+            const glm::vec3 world{model * glm::vec4(centre, 1.0f)};
+            cell[t] = glm::ivec2(glm::floor(glm::vec2(world.x, world.z) / tileSize));
+            order[t] = static_cast<uint32_t>(t);
+        }
+        std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+            return cell[a].y != cell[b].y ? cell[a].y < cell[b].y : cell[a].x < cell[b].x;
+        });
+        indices.clear();
+        for (size_t k = 0; k < triangles; ++k) {
+            const uint32_t t = order[k];
+            if (k == 0 || cell[t] != cell[order[k - 1]]) {
+                o.chunks.push_back({{}, 0.0f, {static_cast<uint32_t>(indices.size()), 0, 0, 1}});
+            }
+            Chunk& chunk = o.chunks.back();
+            for (int v = 0; v < 3; ++v) {
+                const uint32_t index = mesh.indices[3 * t + v];
+                indices.push_back(index);
+                chunk.bounds.expand(glm::vec3(model * glm::vec4(mesh.vertices[index].position, 1.0f)));
+            }
+            chunk.range.indexCount += 3;
+        }
+    } else {
+        Aabb local;
+        for (const Vertex& v : mesh.vertices) local.expand(v.position);
+        o.chunks.push_back({transformAabb(local, model), 0.0f, {0, static_cast<uint32_t>(indices.size()), 0, 1}});
+    }
     o.mesh.vertices = uploadBuffer(*ctx_, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    o.mesh.indices = uploadBuffer(*ctx_, mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+    o.mesh.indices = uploadBuffer(*ctx_, indices.data(), indices.size() * sizeof(uint32_t),
                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-    o.mesh.indexCount = static_cast<uint32_t>(mesh.indices.size());
+    o.mesh.indexCount = static_cast<uint32_t>(indices.size());
     o.model = model;
     o.instances = identityInstance_;
     o.name = std::move(name);
-    Aabb local;
-    for (const Vertex& v : mesh.vertices) local.expand(v.position);
-    o.chunks.push_back({transformAabb(local, model), 0.0f, 0, 1});
     objects_.push_back(std::move(o));
     return static_cast<uint32_t>(objects_.size() - 1);
 }
@@ -134,7 +167,7 @@ uint32_t Renderer::addObject(const MeshData& mesh, const glm::mat4& model, std::
 uint32_t Renderer::addInstanced(const MeshData& mesh, const std::vector<InstanceData>& instances, bool twoSided,
                                 std::string name, float chunkSize) {
     if (instances.empty()) throw std::runtime_error("addInstanced: no instances for " + name);
-    const uint32_t index = addObject(mesh, glm::mat4(1.0f), std::move(name));
+    const uint32_t index = addObject(mesh, glm::mat4(1.0f), std::move(name));  // one chunk, replaced below
     RenderObject& o = objects_[index];
 
     // The mesh's extent around the instance origin. Instances turn about Y, so sideways it is the
@@ -161,9 +194,9 @@ uint32_t Renderer::addInstanced(const MeshData& mesh, const std::vector<Instance
     o.chunks.clear();
     for (uint32_t i = 0; i < sorted.size(); ++i) {
         const InstanceData& d = sorted[i];
-        if (i == 0 || cellOf(d) != cellOf(sorted[i - 1])) o.chunks.push_back({{}, 0.0f, i, 0});
-        InstanceChunk& chunk = o.chunks.back();
-        ++chunk.instanceCount;
+        if (i == 0 || cellOf(d) != cellOf(sorted[i - 1])) o.chunks.push_back({{}, 0.0f, {0, o.mesh.indexCount, i, 0}});
+        Chunk& chunk = o.chunks.back();
+        ++chunk.range.instanceCount;
         const glm::vec3 p{d.positionScale};
         const float s = d.positionScale.w;
         chunk.bounds.expand(p + glm::vec3(-radius * s, minY * s, -radius * s));
@@ -575,26 +608,57 @@ void Renderer::drawFrame(const Camera& camera) {
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 }
 
+namespace {
+
+// Appends a chunk's range to a draw list, extending the last draw when the two are neighbours in
+// the instance buffer (same triangles, next instances) or in the index buffer (same instances,
+// next triangles).
+template <typename Range>
+void appendDraw(std::vector<Range>& draws, const Range& r) {
+    if (!draws.empty()) {
+        Range& last = draws.back();
+        const bool sameIndices = last.firstIndex == r.firstIndex && last.indexCount == r.indexCount;
+        const bool sameInstances = last.firstInstance == r.firstInstance && last.instanceCount == r.instanceCount;
+        if (sameIndices && last.firstInstance + last.instanceCount == r.firstInstance) {
+            last.instanceCount += r.instanceCount;
+            return;
+        }
+        if (sameInstances && last.firstIndex + last.indexCount == r.firstIndex) {
+            last.indexCount += r.indexCount;
+            return;
+        }
+    }
+    draws.push_back(r);
+}
+
+}  // namespace
+
 void Renderer::cullObjects(const glm::mat4& viewProj) {
     const Frustum frustum = extractFrustum(viewProj);
+    // A chunk's shadow falls away from the sun. Stretch its box that way, far enough to cross the
+    // whole shadow volume: if even the stretched box misses the view, so does the shadow.
+    const glm::vec3 shadowReach = -glm::normalize(sunDirection) * (4.0f * shadowRadius_);
     for (RenderObject& o : objects_) {
-        o.visibleRanges.clear();
+        o.mainDraws.clear();
+        o.shadowDraws.clear();
         if (!o.visible) continue;
         stats_.chunksTotal += static_cast<uint32_t>(o.chunks.size());
-        for (const InstanceChunk& c : o.chunks) {
-            if (frustumCulling) {
-                Aabb box = c.bounds;
-                const float sway = c.swayReach * windStrength;
-                box.min -= glm::vec3(sway, 0.0f, sway);
-                box.max += glm::vec3(sway, 0.0f, sway);
-                if (!intersects(frustum, box)) continue;
+        if (o.castsShadow) stats_.shadowChunksTotal += static_cast<uint32_t>(o.chunks.size());
+        for (const Chunk& c : o.chunks) {
+            Aabb box = c.bounds;
+            const float sway = c.swayReach * windStrength;
+            box.min -= glm::vec3(sway, 0.0f, sway);
+            box.max += glm::vec3(sway, 0.0f, sway);
+            if (!frustumCulling || intersects(frustum, box)) {
+                ++stats_.chunksVisible;
+                appendDraw(o.mainDraws, c.range);
             }
-            ++stats_.chunksVisible;
-            if (!o.visibleRanges.empty() &&
-                o.visibleRanges.back().firstInstance + o.visibleRanges.back().instanceCount == c.firstInstance) {
-                o.visibleRanges.back().instanceCount += c.instanceCount;
-            } else {
-                o.visibleRanges.push_back({c.firstInstance, c.instanceCount});
+            if (!o.castsShadow) continue;
+            Aabb swept = box;
+            swept.expand(Aabb{box.min + shadowReach, box.max + shadowReach});
+            if (!frustumCulling || intersects(frustum, swept)) {
+                ++stats_.shadowChunksVisible;
+                appendDraw(o.shadowDraws, c.range);
             }
         }
     }
@@ -604,12 +668,8 @@ void Renderer::drawObjects(VkCommandBuffer cmd, bool shadowPass) {
     VkPipeline bound = VK_NULL_HANDLE;
     for (const RenderObject& o : objects_) {
         if (!o.visible) continue;
-        if (shadowPass && !o.castsShadow) continue;
-        // The shadow pass draws everything for now (it sees the island from the sun, not the camera).
-        const InstanceRange all{0, o.instanceCount};
-        const InstanceRange* ranges = shadowPass ? &all : o.visibleRanges.data();
-        const size_t rangeCount = shadowPass ? 1 : o.visibleRanges.size();
-        if (rangeCount == 0) continue;
+        const std::vector<DrawRange>& draws = shadowPass ? o.shadowDraws : o.mainDraws;
+        if (draws.empty()) continue;
         if (!shadowPass) {
             VkPipeline wanted = o.twoSided ? foliagePipeline_ : meshPipeline_;
             if (wanted != bound) {
@@ -622,11 +682,12 @@ void Renderer::drawObjects(VkCommandBuffer cmd, bool shadowPass) {
         const VkDeviceSize offsets[] = {0, 0};
         vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
         vkCmdBindIndexBuffer(cmd, o.mesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-        for (size_t r = 0; r < rangeCount; ++r) {
-            // firstInstance offsets where per-instance attributes are read from the instance buffer.
+        for (const DrawRange& d : draws) {
+            // firstIndex picks the triangles (a tile), firstInstance where per-instance attributes
+            // start in the instance buffer.
             ++stats_.drawCalls;
-            stats_.triangles += static_cast<uint64_t>(o.mesh.indexCount / 3) * ranges[r].instanceCount;
-            vkCmdDrawIndexed(cmd, o.mesh.indexCount, ranges[r].instanceCount, 0, 0, ranges[r].firstInstance);
+            stats_.triangles += static_cast<uint64_t>(d.indexCount / 3) * d.instanceCount;
+            vkCmdDrawIndexed(cmd, d.indexCount, d.instanceCount, d.firstIndex, 0, d.firstInstance);
         }
     }
 }

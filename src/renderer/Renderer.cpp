@@ -13,6 +13,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -458,12 +459,13 @@ void Renderer::drawFrame(const Camera& camera) {
     profiler_.reset(cmd, frameIndex_);
     profiler_.begin(cmd, frameIndex_, GpuScope::Frame);
 
+    const uint32_t repeat = std::max(sceneRepeat, 1u);
     profiler_.begin(cmd, frameIndex_, GpuScope::Shadow);
-    recordShadowPass(cmd, frame.descriptorSet);
+    for (uint32_t i = 0; i < repeat; ++i) recordShadowPass(cmd, frame.descriptorSet);
     profiler_.end(cmd, frameIndex_, GpuScope::Shadow);
 
     profiler_.begin(cmd, frameIndex_, GpuScope::Main);
-    recordMainPass(cmd, frame.descriptorSet);
+    for (uint32_t i = 0; i < repeat; ++i) recordMainPass(cmd, frame.descriptorSet);
     profiler_.end(cmd, frameIndex_, GpuScope::Main);
 
     profiler_.begin(cmd, frameIndex_, GpuScope::Composite);

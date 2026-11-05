@@ -17,4 +17,6 @@ struct VegetationKind {
 // Pine trees, broadleaf trees, rocks and grass tufts scattered over the island's top surface.
 // Placement follows the terrain: trees in forest patches on gentle slopes, rocks mostly on the
 // rocky peaks, grass on green ground. Deterministic for a given seed.
-std::vector<VegetationKind> generateVegetation(const IslandParams& island = {}, uint32_t seed = 11);
+// grassDensity multiplies the number of grass tufts (used to make benchmarks GPU-heavy).
+std::vector<VegetationKind> generateVegetation(const IslandParams& island = {}, uint32_t seed = 11,
+                                               float grassDensity = 1.0f);

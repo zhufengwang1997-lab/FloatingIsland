@@ -66,6 +66,9 @@ public:
     float windStrength = 1.0f;
     // >= 0: use this as the animation time (seconds) instead of the clock, for repeatable benchmarks.
     float timeOverride = -1.0f;
+    // Benchmarks: record the shadow and main passes this many times per frame, so the GPU stays fully
+    // busy (and at a steady clock). The output is the same; timings are totals over all repeats.
+    uint32_t sceneRepeat = 1;
 
     // Objects, for the debug UI.
     uint32_t objectCount() const { return static_cast<uint32_t>(objects_.size()); }

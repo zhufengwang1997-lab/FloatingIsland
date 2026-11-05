@@ -13,7 +13,9 @@ class Benchmark {
 public:
     static constexpr int kWarmupFrames = 120;  // held at the first pose, not recorded
 
-    explicit Benchmark(int measuredFrames, std::string csvPath = {});
+    // sceneRepeat: how many times the renderer draws the shadow and main passes per frame
+    // (Renderer::sceneRepeat); their timings are divided by it, so results are per single pass.
+    Benchmark(int measuredFrames, int sceneRepeat, std::string csvPath = {});
 
     int totalFrames() const { return kWarmupFrames + measuredFrames_; }
     // Camera pose and animation time for a frame (0 .. totalFrames - 1).
@@ -30,6 +32,7 @@ private:
     };
 
     int measuredFrames_;
+    int sceneRepeat_;
     std::string csvPath_;
     std::vector<float> cpuMs_;
     std::vector<Sample> gpu_;

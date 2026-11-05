@@ -12,6 +12,9 @@
 //   --no-vsync        start with an uncapped frame rate (MAILBOX / IMMEDIATE if available)
 //   --benchmark N     fixed camera path, vsync off, no UI; N measured frames, then print statistics
 //   --csv P           with --benchmark: write every frame's GPU timings to P
+//   --grass-density D multiply the number of grass tufts by D (default 1)
+//   --repeat K        with --benchmark: draw the scene passes K times per frame (default 16) so the
+//                     GPU stays fully loaded; reported shadow / main times are per single pass
 int main(int argc, char** argv) {
     AppOptions options;
     for (int i = 1; i < argc; ++i) {
@@ -21,6 +24,8 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--no-vsync") == 0) options.vsync = false;
         else if (std::strcmp(argv[i], "--benchmark") == 0 && hasValue) options.benchmarkFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--csv") == 0 && hasValue) options.benchmarkCsv = argv[++i];
+        else if (std::strcmp(argv[i], "--repeat") == 0 && hasValue) options.sceneRepeat = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--grass-density") == 0 && hasValue) options.grassDensity = std::strtof(argv[++i], nullptr);
         else std::fprintf(stderr, "Ignoring unknown argument %s\n", argv[i]);
     }
     try {

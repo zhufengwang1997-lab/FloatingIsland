@@ -40,8 +40,8 @@ Stats computeStats(std::vector<float> v) {
 
 }  // namespace
 
-Benchmark::Benchmark(int measuredFrames, std::string csvPath)
-    : measuredFrames_(std::max(measuredFrames, 1)), csvPath_(std::move(csvPath)) {}
+Benchmark::Benchmark(int measuredFrames, int sceneRepeat, std::string csvPath)
+    : measuredFrames_(std::max(measuredFrames, 1)), sceneRepeat_(std::max(sceneRepeat, 1)), csvPath_(std::move(csvPath)) {}
 
 void Benchmark::pose(int frame, Camera& camera) const {
     const float t = static_cast<float>(std::max(frame - kWarmupFrames, 0)) / static_cast<float>(measuredFrames_);
@@ -67,8 +67,9 @@ void Benchmark::record(int frame, float cpuMs, const GpuProfiler& gpu) {
     cpuMs_.push_back(cpuMs);
     if (gpu.supported() && gpu.sampleCount() != lastGpuSample_) {
         lastGpuSample_ = gpu.sampleCount();
-        gpu_.push_back({gpu.lastMilliseconds(GpuScope::Frame), gpu.lastMilliseconds(GpuScope::Shadow),
-                        gpu.lastMilliseconds(GpuScope::Main), gpu.lastMilliseconds(GpuScope::Composite),
+        const float perPass = 1.0f / static_cast<float>(sceneRepeat_);
+        gpu_.push_back({gpu.lastMilliseconds(GpuScope::Frame), gpu.lastMilliseconds(GpuScope::Shadow) * perPass,
+                        gpu.lastMilliseconds(GpuScope::Main) * perPass, gpu.lastMilliseconds(GpuScope::Composite),
                         gpu.lastMilliseconds(GpuScope::Ui)});
     }
 }
@@ -82,8 +83,9 @@ void Benchmark::report() const {
     std::vector<float> scene;
     for (const Sample& s : gpu_) scene.push_back(s.shadow + s.main);
 
-    std::printf("\nBenchmark: %zu frames measured (%d warm-up), %zu GPU samples\n", cpuMs_.size(), kWarmupFrames,
-                gpu_.size());
+    std::printf("\nBenchmark: %zu frames measured (%d warm-up), %zu GPU samples, scene passes x%d per frame\n",
+                cpuMs_.size(), kWarmupFrames, gpu_.size(), sceneRepeat_);
+    if (sceneRepeat_ > 1) std::printf("Shadow / main timings below are per single pass (total / %d)\n", sceneRepeat_);
     std::printf("%-22s %8s %8s %8s %8s\n", "ms", "mean", "p50", "p95", "p99");
     auto row = [](const char* name, const std::vector<float>& v) {
         const Stats s = computeStats(v);

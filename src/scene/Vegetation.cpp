@@ -2,6 +2,7 @@
 
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <utility>
@@ -191,7 +192,7 @@ InstanceData makeInstance(float x, float y, float z, float scale, float yaw, flo
 
 }  // namespace
 
-std::vector<VegetationKind> generateVegetation(const IslandParams& island, uint32_t seed) {
+std::vector<VegetationKind> generateVegetation(const IslandParams& island, uint32_t seed, float grassDensity) {
     VegetationKind pines{"Pine trees", makePine(), {}, false};
     VegetationKind broadleaves{"Broadleaf trees", makeBroadleaf(), {}, false};
     VegetationKind rocks{"Rocks", makeRock(), {}, false};
@@ -226,7 +227,9 @@ std::vector<VegetationKind> generateVegetation(const IslandParams& island, uint3
     });
 
     // Grass: dense on green ground, thinning out on rock, sand and steep slopes.
-    scatter(island, 0.42f, seed + 2000, [&](float x, float z, auto random) {
+    // Density scales tufts per area, so the grid spacing shrinks with its square root.
+    const float grassSpacing = 0.42f / std::sqrt(std::max(grassDensity, 0.01f));
+    scatter(island, grassSpacing, seed + 2000, [&](float x, float z, auto random) {
         const IslandSurface s = sampleIslandSurface(x, z, island);
         if (!s.land || s.coast > 0.93f) return;
         const float patchiness = 0.5f + 0.5f * islandNoise(x * 0.2f, z * 0.2f, seed + 400);

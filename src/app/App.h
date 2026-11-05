@@ -16,6 +16,8 @@ struct AppOptions {
     bool vsync = true;
     int benchmarkFrames = 0;     // > 0: run the benchmark camera path for that many measured frames
     std::string benchmarkCsv;    // optional per-frame GPU timings of the benchmark
+    float grassDensity = 1.0f;   // multiplies the number of grass tufts
+    int sceneRepeat = 16;        // benchmark: draw the scene passes this many times per frame
 };
 
 // Owns the window and the main loop.
@@ -24,8 +26,8 @@ public:
     void run(const AppOptions& options);
 
 private:
-    void init(bool vsync);
-    void loadScene();
+    void init(bool vsync, float grassDensity);
+    void loadScene(float grassDensity);
     void mainLoop(int maxFrames, const std::string& screenshotPath, Benchmark* benchmark);
     void shutdown();
 

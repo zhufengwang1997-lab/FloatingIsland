@@ -34,7 +34,7 @@ ninja -C build
 ```bash
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 ninja -C build-release
-./build-release/FloatingIsland --benchmark 3000 --csv out.csv
+./build-release/FloatingIsland --benchmark 1500 --csv out.csv   # 每帧场景画 16 遍让 GPU 满载，报告单遍耗时
 ```
 
 操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速；F1 显示 / 隐藏调试面板。

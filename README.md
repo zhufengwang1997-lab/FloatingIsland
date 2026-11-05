@@ -37,11 +37,13 @@ ninja -C build-release
 ./build-release/FloatingIsland --benchmark 1500 --csv out.csv   # 每帧场景画 16 遍让 GPU 满载，报告单遍耗时
 ./build-release/FloatingIsland --benchmark 1500 --grass-density 4 --grass-shadows   # 加重草的负载；让草也写入阴影贴图（用于前后对比）
 ./build-release/FloatingIsland --benchmark 1500 --grass-density 4 --no-culling     # 关闭视锥剔除（用于前后对比）
+./build-release/FloatingIsland --benchmark 1500 --grass-density 4 --no-lod         # 关闭草的距离 LOD（用于前后对比）
+./build/FloatingIsland --no-ui                                                      # 启动时隐藏调试面板
 ```
 
 操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速；F1 或 H 显示 / 隐藏调试面板（Mac 键盘上 F1 默认是调亮度，要按 fn + F1）。
 
-调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；视锥剔除开关和 Freeze（冻结剔除用的视锥，飞出去就能看到哪些区块没画）；物体列表里可以单独开关每类物体的显示和阴影（草默认不投射阴影）；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
+调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；视锥剔除开关和 Freeze（冻结剔除用的视锥，飞出去就能看到哪些区块没画）；草的距离 LOD 开关、距离范围和远处保留比例；物体列表里可以单独开关每类物体的显示和阴影（草默认不投射阴影）；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
 
 macOS 上用 Homebrew 安装的验证层时，需要让动态库加载器能找到它：
 
@@ -54,9 +56,9 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 | 目录 | 内容 |
 | --- | --- |
 | `src/app` | 窗口与主循环、调试面板（`DebugUi`） |
-| `src/rhi` | Vulkan 底层封装：Instance / Device / 队列 / VMA（`VulkanContext`）、交换链（`Swapchain`）、Buffer 与 Image（`Resources`）、Pipeline 构建（`Pipeline`） |
+| `src/rhi` | Vulkan 底层封装：Instance / Device / 队列 / VMA（`VulkanContext`）、交换链（`Swapchain`）、Buffer 与 Image（`Resources`）、Pipeline 构建（`Pipeline`）、磁盘上的 Pipeline Cache（`PipelineCache`） |
 | `src/renderer` | 每帧的命令录制、同步与提交：阴影 Pass + 主 Pass + UI Pass（`Renderer`），GPU 时间戳计时（`GpuProfiler`） |
-| `src/scene` | 相机（`Camera`）、程序化生成的浮空岛网格（`IslandMesh`）、基础几何体（`Primitives`）、按地形散布的植被与岩石（`Vegetation`） |
+| `src/scene` | 相机（`Camera`）、包围盒与视锥测试（`Culling`）、程序化生成的浮空岛网格（`IslandMesh`，海岸线处按真实轮廓裁剪）、基础几何体（`Primitives`）、按地形散布的植被与岩石（`Vegetation`） |
 | `shaders` | HLSL Shader，构建时由 DXC 编译到 `build/shaders/*.spv`；`common.hlsli` 为共享的资源绑定定义 |
 
 ## 渲染流程（每帧）
@@ -67,6 +69,8 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 2. **主 Pass**：GGX / Smith / Schlick 的金属度-粗糙度 PBR，3×3 PCF 阴影，半球环境光，输出线性 HDR 到离屏 RGBA16F 图像。
 3. **合成 Pass**：全屏三角形读取 HDR 图像，背景处（alpha = 0）按视线方向画天空渐变和太阳，再做曝光和 ACES 色调映射，写入 sRGB 交换链。
 4. **UI Pass**：在合成结果上叠加 ImGui（loadOp = LOAD）。
+
+剔除与 LOD（每帧在 CPU 上，录制命令之前）：植被按地面 8×8 格子分成区块，岛的网格也切成同样大小的块。主 Pass 只画包围盒在相机视锥里的区块；阴影 Pass 只画“沿光线拉长后的包围盒”在相机视锥里的区块（影子可能落进画面）。草还按距离只画每个区块的一部分（35 米外逐渐变稀，110 米外剩 25%），多余的草丛在顶点着色器里平滑缩小到消失。相邻的可见区块合并成一次 Draw Call。
 
 每个 Pass 前后写入时间戳；每帧的查询结果在该帧的 Fence 触发后读回，不会让 CPU 等待 GPU。
 

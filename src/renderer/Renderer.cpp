@@ -104,6 +104,7 @@ void Renderer::shutdown() {
     destroyBuffer(ctx_->allocator, captureBuffer_);
     pipelineCache_.destroy();
     vkDestroyPipeline(device, meshPipeline_, nullptr);
+    vkDestroyPipeline(device, cloudPipeline_, nullptr);
     vkDestroyPipeline(device, foliagePipeline_, nullptr);
     vkDestroyPipeline(device, compositePipeline_, nullptr);
     vkDestroyPipeline(device, shadowPipeline_, nullptr);
@@ -470,6 +471,20 @@ void Renderer::createPipelines() {
                              .build(device, pipelineCache_.handle());
     vkDestroyShaderModule(device, compositeVs, nullptr);
     vkDestroyShaderModule(device, compositePs, nullptr);
+
+    // Sea of clouds: a quad generated from the vertex index, depth tested like the scene.
+    VkShaderModule cloudsVs = loadShaderModule(device, FI_SHADER_DIR "/clouds.vs.spv");
+    VkShaderModule cloudsPs = loadShaderModule(device, FI_SHADER_DIR "/clouds.ps.spv");
+    cloudPipeline_ = GraphicsPipelineBuilder()
+                         .stage(VK_SHADER_STAGE_VERTEX_BIT, cloudsVs, "VSMain")
+                         .stage(VK_SHADER_STAGE_FRAGMENT_BIT, cloudsPs, "PSMain")
+                         .cull(VK_CULL_MODE_NONE)
+                         .colorFormat(kHdrFormat)
+                         .depthFormat(kDepthFormat)
+                         .layout(pipelineLayout_)
+                         .build(device, pipelineCache_.handle());
+    vkDestroyShaderModule(device, cloudsVs, nullptr);
+    vkDestroyShaderModule(device, cloudsPs, nullptr);
 }
 
 void Renderer::recreateSwapchain() {
@@ -812,6 +827,13 @@ void Renderer::recordMainPass(VkCommandBuffer cmd, VkDescriptorSet set) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
     setViewportAndScissor(cmd, hdr_.extent);
     drawObjects(cmd, false);  // binds the mesh / foliage pipeline per object
+    if (cloudSea) {
+        // After the scene: wherever the island is in front, the depth test skips the cloud shader.
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cloudPipeline_);
+        vkCmdDraw(cmd, 6, 1, 0, 0);
+        ++stats_.drawCalls;
+        stats_.triangles += 2;
+    }
     vkCmdEndRendering(cmd);
 
     // Color writes must finish before the composite pass reads the image.

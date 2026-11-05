@@ -90,6 +90,7 @@ public:
     // Distance LOD for objects added with distanceLod (the grass): all instances up to lodStart, then
     // fewer and fewer, down to lodMinFraction of them from lodEnd on. Dropped instances shrink away.
     bool distanceLod = true;
+    bool cloudSea = true;  // the sea of clouds below the island (shaders/clouds.hlsl)
     float lodStart = 35.0f;
     float lodEnd = 110.0f;
     float lodMinFraction = 0.25f;  // clamped to >= kMinLodFraction
@@ -215,6 +216,7 @@ private:
     VkPipeline meshPipeline_ = VK_NULL_HANDLE;
     VkPipeline foliagePipeline_ = VK_NULL_HANDLE;  // mesh shading without back-face culling
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;
+    VkPipeline cloudPipeline_ = VK_NULL_HANDLE;  // the sea of clouds below the island
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
     PipelineCache pipelineCache_;  // build/pipeline_cache.bin
 

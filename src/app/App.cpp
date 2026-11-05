@@ -22,6 +22,7 @@ void App::run(const AppOptions& options) {
         renderer_.sceneRepeat = static_cast<uint32_t>(std::max(options.sceneRepeat, 1));
         renderer_.frustumCulling = options.frustumCulling;
         renderer_.distanceLod = options.distanceLod;
+        renderer_.cloudSea = options.cloudSea;
         ui_.visible = false;
         mainLoop(benchmark.totalFrames(), options.screenshotPath, &benchmark);
         benchmark.report();
@@ -29,6 +30,7 @@ void App::run(const AppOptions& options) {
         init(options.vsync, options);
         renderer_.frustumCulling = options.frustumCulling;
         renderer_.distanceLod = options.distanceLod;
+        renderer_.cloudSea = options.cloudSea;
         ui_.visible = options.showUi;
         mainLoop(options.maxFrames, options.screenshotPath, nullptr);
     }

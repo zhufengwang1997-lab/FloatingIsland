@@ -147,6 +147,7 @@ void DebugUi::drawSettings(Renderer& renderer) {
     ImGui::Checkbox("Frustum culling", &renderer.frustumCulling);
     ImGui::SameLine();
     ImGui::Checkbox("Freeze", &renderer.freezeCulling);
+    ImGui::Checkbox("Sea of clouds", &renderer.cloudSea);
     ImGui::Checkbox("Grass distance LOD", &renderer.distanceLod);
     if (renderer.distanceLod) {
         ImGui::DragFloatRange2("LOD distance", &renderer.lodStart, &renderer.lodEnd, 0.5f, 0.0f, 300.0f, "%.0f", "%.0f");

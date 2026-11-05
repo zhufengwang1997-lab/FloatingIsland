@@ -143,6 +143,11 @@ if(NOT MSVC)
   set_source_files_properties(src/rhi/VmaImpl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
+if(WIN32)
+  # Keep windows.h (if anything pulls it in) from defining min / max macros.
+  target_compile_definitions(FloatingIsland PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 if(MSVC)
   target_compile_options(FloatingIsland PRIVATE /W4 /utf-8)
 else()

@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <vector>
@@ -61,9 +62,11 @@ void PipelineCache::save() const {
             return;
         }
     }
-    if (std::rename(temp.c_str(), path_.c_str()) != 0) {
-        std::fprintf(stderr, "Pipeline cache: cannot replace %s\n", path_.c_str());
-    }
+    // std::filesystem::rename replaces an existing file on every platform (std::rename doesn't on
+    // Windows).
+    std::error_code error;
+    std::filesystem::rename(temp, path_, error);
+    if (error) std::fprintf(stderr, "Pipeline cache: cannot replace %s: %s\n", path_.c_str(), error.message().c_str());
 }
 
 void PipelineCache::destroy() {

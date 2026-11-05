@@ -16,9 +16,9 @@ float smoothstep(float edge0, float edge1, float x) {
 struct Palette {
     glm::vec3 zenith, horizon, below, glow;
 };
-constexpr Palette kDay{{0.10f, 0.24f, 0.68f}, {0.38f, 0.55f, 0.80f}, {0.24f, 0.38f, 0.62f}, {0.0f, 0.0f, 0.0f}};
-constexpr Palette kSunset{{0.09f, 0.12f, 0.30f}, {0.62f, 0.42f, 0.36f}, {0.20f, 0.18f, 0.28f}, {1.40f, 0.50f, 0.12f}};
-constexpr Palette kNight{{0.005f, 0.008f, 0.019f}, {0.012f, 0.017f, 0.032f}, {0.006f, 0.009f, 0.020f}, {0.0f, 0.0f, 0.0f}};
+const Palette kDay{{0.10f, 0.24f, 0.68f}, {0.38f, 0.55f, 0.80f}, {0.24f, 0.38f, 0.62f}, {0.0f, 0.0f, 0.0f}};
+const Palette kSunset{{0.09f, 0.12f, 0.30f}, {0.62f, 0.42f, 0.36f}, {0.20f, 0.18f, 0.28f}, {1.40f, 0.50f, 0.12f}};
+const Palette kNight{{0.005f, 0.008f, 0.019f}, {0.012f, 0.017f, 0.032f}, {0.006f, 0.009f, 0.020f}, {0.0f, 0.0f, 0.0f}};
 
 Palette mix(const Palette& a, const Palette& b, float t) {
     return {glm::mix(a.zenith, b.zenith, t), glm::mix(a.horizon, b.horizon, t), glm::mix(a.below, b.below, t),

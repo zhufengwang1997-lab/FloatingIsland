@@ -14,6 +14,14 @@ struct FrameData
     float4 params;            // x: exposure, y: 1 / shadow map size, z: time (s), w: wind strength
     float4 lod;               // distance LOD: x: start distance, y: end distance, z: fraction kept at
                               // the end, w: fade width (in rank units)
+    // Sky for the time of day (computed on the CPU, src/scene/Sky.cpp). sunDirection / sunColor
+    // above are the light that shades the scene: the sun by day, the moon by night.
+    float4 skyZenith;         // rgb; w: night amount, 0..1 (stars and moon)
+    float4 skyHorizon;        // rgb
+    float4 skyBelow;          // rgb: the haze below the horizon
+    float4 skyGlow;           // rgb: sunrise / sunset band along the horizon
+    float4 skySun;            // xyz: unit vector towards the real sun (also when it has set)
+    float4 skySunDisk;        // rgb: radiance of the sun disk and its halo
 };
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
@@ -25,17 +33,18 @@ struct ObjectData
 };
 [[vk::push_constant]] ObjectData object;
 
-// Sky radiance seen along a direction (HDR, before exposure): a horizon-to-zenith gradient, a
-// lighter haze below the horizon (the island floats, so we can look down) and the sun disk.
+// Sky radiance seen along a direction (HDR, before exposure), without the sun disk, stars and
+// moon (SkyBackground in composite.hlsl adds those): a horizon-to-zenith gradient, a haze below the
+// horizon (the island floats, so we can look down), the sunset glow and the sun's wide halo.
 float3 SkyRadiance(float3 dir)
 {
-    float3 zenith = float3(0.10, 0.24, 0.68);
-    float3 horizon = float3(0.38, 0.55, 0.80);
-    float3 below = float3(0.24, 0.38, 0.62);
-    float3 sky = dir.y >= 0.0 ? lerp(horizon, zenith, sqrt(saturate(dir.y)))
-                              : lerp(horizon, below, sqrt(saturate(-dir.y)));
-    float sunCos = saturate(dot(dir, frame.sunDirection.xyz));
-    sky += frame.sunColor.rgb * (pow(sunCos, 3000.0) * 8.0 + pow(sunCos, 24.0) * 0.08);
+    float3 sky = dir.y >= 0.0 ? lerp(frame.skyHorizon.rgb, frame.skyZenith.rgb, sqrt(saturate(dir.y)))
+                              : lerp(frame.skyHorizon.rgb, frame.skyBelow.rgb, sqrt(saturate(-dir.y)));
+    // Sunrise / sunset: a warm band hugging the horizon, much brighter on the sun's side.
+    float towardsSun = dot(normalize(dir.xz + 1e-5), normalize(frame.skySun.xz + 1e-5)) * 0.5 + 0.5;
+    sky += frame.skyGlow.rgb * exp(-abs(dir.y) * 7.0) * (0.15 + 0.85 * towardsSun * towardsSun * towardsSun);
+    float sunCos = saturate(dot(dir, frame.skySun.xyz));
+    sky += frame.skySunDisk.rgb * pow(sunCos, 24.0) * 0.08;
     return sky;
 }
 

@@ -80,10 +80,11 @@ float SunShadow(float3 worldPos)
     return sum / 9.0;
 }
 
+// Ambient light from a direction: the average sky above blended with the dimmer haze below.
 float3 Hemisphere(float3 dir)
 {
-    float3 sky = float3(0.35, 0.50, 0.75);
-    float3 ground = float3(0.18, 0.14, 0.10);
+    float3 sky = (frame.skyZenith.rgb + frame.skyHorizon.rgb) * 0.5;
+    float3 ground = frame.skyBelow.rgb * 0.5;
     return lerp(ground, sky, dir.y * 0.5 + 0.5);
 }
 

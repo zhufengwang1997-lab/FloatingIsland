@@ -111,7 +111,7 @@ float4 PSMain(VSOutput input) : SV_Target0
     float3 L = normalize(frame.sunDirection.xyz);
     float sunAmount = saturate(L.y) * (1.0 - 0.6 * shade);
     float3 albedo = float3(0.92, 0.93, 0.96);
-    float3 skyLight = float3(0.35, 0.50, 0.75) * 0.7;  // like Hemisphere(up) in mesh.hlsl
+    float3 skyLight = (frame.skyZenith.rgb + frame.skyHorizon.rgb) * 0.5 * 0.8;  // the sky above
     // Thick parts are bright billows; thin edges let light through and read greyer.
     float thickness = smoothstep(0.40, 0.80, density);
     float3 lit = albedo * (frame.sunColor.rgb * sunAmount * lerp(0.30, 0.60, thickness) + skyLight);

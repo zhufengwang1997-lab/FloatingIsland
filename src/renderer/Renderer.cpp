@@ -560,13 +560,19 @@ void Renderer::drawFrame(const Camera& camera) {
     uniforms.cameraPosition = glm::vec4(camera.position, 1.0f);
     uniforms.sunDirection = glm::vec4(glm::normalize(sunDirection), 0.0f);
     uniforms.sunColor = glm::vec4(sunColor, 0.0f);
-    uniforms.params = glm::vec4(exposure, 1.0f / static_cast<float>(kShadowMapSize),
+    uniforms.params = glm::vec4(exposure * sky.exposureScale, 1.0f / static_cast<float>(kShadowMapSize),
                                 timeOverride >= 0.0f ? timeOverride : static_cast<float>(glfwGetTime() - startTime_),
                                 windStrength);
     // Disabled LOD: start beyond any view distance, so every instance keeps its full size.
     lodMinFraction = std::clamp(lodMinFraction, kMinLodFraction, 1.0f);
     uniforms.lod = distanceLod ? glm::vec4(lodStart, std::max(lodEnd, lodStart + 1.0f), lodMinFraction, kLodFade)
                                : glm::vec4(1e9f, 2e9f, 1.0f, kLodFade);
+    uniforms.skyZenith = glm::vec4(sky.zenith, sky.night);
+    uniforms.skyHorizon = glm::vec4(sky.horizon, 0.0f);
+    uniforms.skyBelow = glm::vec4(sky.below, 0.0f);
+    uniforms.skyGlow = glm::vec4(sky.glow, 0.0f);
+    uniforms.skySun = glm::vec4(sky.sunDirection, 0.0f);
+    uniforms.skySunDisk = glm::vec4(sky.sunDisk, 0.0f);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
     VK_CHECK(vmaFlushAllocation(ctx_->allocator, frame.uniforms.allocation, 0, sizeof(uniforms)));
 
@@ -634,8 +640,6 @@ void Renderer::drawFrame(const Camera& camera) {
     if (capture) {
         // Debug feature, so simply wait for this frame instead of pipelining the readback.
         VK_CHECK(vkWaitForFences(device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
-    // That frame's timestamps are now available too.
-    profiler_.collect(device, frameIndex_);
         writeCapture(capturePath_);
         capturePath_.clear();
     }

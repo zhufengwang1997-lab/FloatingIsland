@@ -67,6 +67,8 @@ void App::init(bool vsync, const AppOptions& options) {
     std::printf("Present mode: %s\n", presentModeName(renderer_.swapchain().presentMode));
     ui_.init(window_, ctx_, renderer_);
     ui_.setVsync(vsync);  // after our callbacks, which ImGui chains to
+    // The benchmark always runs at a fixed time of day, so its numbers stay comparable.
+    ui_.setTimeOfDay(options.timeOfDay, options.dayCycle && options.benchmarkFrames == 0);
     loadScene(options);
 }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene/Sky.h"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -24,6 +26,10 @@ public:
     // True while ImGui is using the mouse or keyboard, so the camera should ignore them.
     bool wantsInput() const;
     void setVsync(bool enabled) { vsync_ = enabled; }
+    void setTimeOfDay(float hour, bool animate) {
+        hour_ = hour;
+        dayCycle_ = animate;
+    }
 
     bool visible = true;
 
@@ -33,9 +39,12 @@ private:
 
     bool initialized_ = false;
 
-    // Sun as angles; the renderer gets the direction vector. Defaults match Renderer's initial sun.
-    float sunAzimuthDeg_ = 30.3f;    // around +Y, from +X towards +Z
-    float sunElevationDeg_ = 35.7f;  // above the horizon
+    // Time of day, which sets the sun (and by night the moon), the sky and the exposure.
+    // 15:00 gives about the sun direction of the earlier steps, so benchmarks stay comparable.
+    float hour_ = 15.0f;
+    bool dayCycle_ = false;        // advance the time of day by itself
+    float hoursPerSecond_ = 0.2f;  // with dayCycle_: one day in two minutes
+    SunPath sunPath_;
     float sunIntensity_ = 3.5f;
     bool vsync_ = true;
 

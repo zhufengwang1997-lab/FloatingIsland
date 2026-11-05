@@ -118,6 +118,7 @@ add_executable(FloatingIsland
   src/scene/Culling.cpp
   src/scene/IslandMesh.cpp
   src/scene/Primitives.cpp
+  src/scene/Sky.cpp
   src/scene/Vegetation.cpp)
 
 add_dependencies(FloatingIsland shaders)

@@ -5,6 +5,7 @@
 #include "rhi/PipelineCache.h"
 #include "rhi/Swapchain.h"
 #include "scene/Culling.h"
+#include "scene/Sky.h"
 
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
@@ -69,9 +70,12 @@ public:
     // Saves the next frame as a binary PPM image (BGRA swapchains only).
     void requestCapture(const std::string& path) { capturePath_ = path; }
 
+    // The directional light that lights the scene and casts shadows: the sun by day, the moon by
+    // night (see SkyState). The app sets these and `sky` every frame from the time of day.
     glm::vec3 sunDirection = glm::normalize(glm::vec3(0.6f, 0.5f, 0.35f));
     glm::vec3 sunColor = glm::vec3(1.0f, 0.96f, 0.90f) * 3.5f;
-    float exposure = 1.0f;
+    SkyState sky = evaluateSky(sunDirection, 3.5f);
+    float exposure = 1.0f;  // multiplied by sky.exposureScale
     // Shadow pass depth bias (dynamic state, so it can be tuned live without new pipelines).
     float shadowBiasConstant = 1.25f;
     float shadowBiasSlope = 2.0f;
@@ -124,6 +128,12 @@ private:
         glm::vec4 sunColor;
         glm::vec4 params;  // x: exposure, y: 1 / shadow map size
         glm::vec4 lod;     // x: start, y: end distance, z: fraction kept at the end, w: fade width
+        glm::vec4 skyZenith;   // rgb; w: night amount (stars, moon)
+        glm::vec4 skyHorizon;
+        glm::vec4 skyBelow;
+        glm::vec4 skyGlow;     // rgb: sunrise / sunset band along the horizon
+        glm::vec4 skySun;      // xyz: direction of the real sun (also below the horizon)
+        glm::vec4 skySunDisk;  // rgb: radiance of the sun disk and halo
     };
 
     // Everything the CPU must not touch again until the GPU has finished that frame.

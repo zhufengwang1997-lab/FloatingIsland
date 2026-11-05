@@ -88,10 +88,10 @@ void DebugUi::build(Renderer& renderer, const Camera& camera, float cpuFrameMs) 
     ImGui::Render();
 
     // Apply the settings every frame, so the renderer always matches the widgets.
-    const float az = glm::radians(sunAzimuthDeg_);
-    const float el = glm::radians(sunElevationDeg_);
-    renderer.sunDirection = {std::cos(el) * std::cos(az), std::sin(el), std::cos(el) * std::sin(az)};
-    renderer.sunColor = glm::vec3(1.0f, 0.96f, 0.90f) * sunIntensity_;
+    if (dayCycle_) hour_ = std::fmod(hour_ + hoursPerSecond_ * cpuFrameMs / 1000.0f, 24.0f);
+    renderer.sky = evaluateSky(sunDirectionAt(hour_, sunPath_), sunIntensity_);
+    renderer.sunDirection = renderer.sky.lightDirection;
+    renderer.sunColor = renderer.sky.lightColor;
     renderer.setVsync(vsync_);
 }
 
@@ -137,10 +137,23 @@ void DebugUi::drawStats(const Renderer& renderer, const Camera& camera) {
 void DebugUi::drawSettings(Renderer& renderer) {
     if (!ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-    ImGui::SeparatorText("Sun");
-    ImGui::SliderFloat("Azimuth", &sunAzimuthDeg_, -180.0f, 180.0f, "%.0f deg");
-    ImGui::SliderFloat("Elevation", &sunElevationDeg_, 2.0f, 90.0f, "%.0f deg");
-    ImGui::SliderFloat("Intensity", &sunIntensity_, 0.0f, 10.0f, "%.2f");
+    ImGui::SeparatorText("Time of day");
+    const int minutes = static_cast<int>(hour_ * 60.0f) % (24 * 60);
+    char clock[16];
+    std::snprintf(clock, sizeof(clock), "%02d:%02d", minutes / 60, minutes % 60);
+    ImGui::SliderFloat("Hour", &hour_, 0.0f, 24.0f, clock);
+    ImGui::Checkbox("Day cycle", &dayCycle_);
+    if (dayCycle_) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("##speed", &hoursPerSecond_, 0.02f, 4.0f, "%.2f h/s", ImGuiSliderFlags_Logarithmic);
+    }
+    ImGui::SliderFloat("Latitude", &sunPath_.latitudeDeg, 0.0f, 80.0f, "%.0f deg");
+    ImGui::SliderFloat("Heading", &sunPath_.headingDeg, -180.0f, 180.0f, "%.0f deg");
+    ImGui::SliderFloat("Sun intensity", &sunIntensity_, 0.0f, 10.0f, "%.2f");
+    const SkyState& sky = renderer.sky;
+    ImGui::Text("Sun elevation %.1f deg   light: %s", glm::degrees(std::asin(sky.sunDirection.y)),
+                sky.lightDirection == sky.sunDirection ? "sun" : "moon");
 
     ImGui::SeparatorText("Scene");
     ImGui::SliderFloat("Wind", &renderer.windStrength, 0.0f, 3.0f, "%.2f");

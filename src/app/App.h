@@ -22,6 +22,8 @@ struct AppOptions {
     bool distanceLod = true;     // thin out distant grass (off for A/B tests)
     bool cloudSea = true;        // the sea of clouds below the island
     bool showUi = true;          // debug panel visible at start
+    float timeOfDay = 15.0f;     // hours, 0..24
+    bool dayCycle = false;       // let the time of day run by itself
     bool grassShadows = false;   // draw grass into the shadow map (off by default; on for A/B tests)
 };
 

@@ -39,11 +39,12 @@ ninja -C build-release
 ./build-release/FloatingIsland --benchmark 1500 --grass-density 4 --no-culling     # 关闭视锥剔除（用于前后对比）
 ./build-release/FloatingIsland --benchmark 1500 --grass-density 4 --no-lod         # 关闭草的距离 LOD（用于前后对比）
 ./build/FloatingIsland --no-ui                                                      # 启动时隐藏调试面板
+./build-release/FloatingIsland --benchmark 1500 --no-clouds                         # 不画云海（用于对比云海的开销）
 ```
 
 操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速；F1 或 H 显示 / 隐藏调试面板（Mac 键盘上 F1 默认是调亮度，要按 fn + F1）。
 
-调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；视锥剔除开关和 Freeze（冻结剔除用的视锥，飞出去就能看到哪些区块没画）；草的距离 LOD 开关、距离范围和远处保留比例；物体列表里可以单独开关每类物体的显示和阴影（草默认不投射阴影）；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
+调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；视锥剔除开关和 Freeze（冻结剔除用的视锥，飞出去就能看到哪些区块没画）；草的距离 LOD 开关、距离范围和远处保留比例；云海开关；物体列表里可以单独开关每类物体的显示和阴影（草默认不投射阴影）；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
 
 macOS 上用 Homebrew 安装的验证层时，需要让动态库加载器能找到它：
 
@@ -63,10 +64,10 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 
 ## 渲染流程（每帧）
 
-场景：程序化浮空岛 + 低多边形松树、阔叶树、岩石与约 1.5 万丛草。每种植被一次实例化绘制（Instance Buffer 存位置 / 缩放 / 朝向 / 色调 / 风力），顶点着色器里做风吹摆动，阴影 Pass 用同一函数，所以影子跟着摆。
+场景：程序化浮空岛 + 低多边形松树、阔叶树、岩石与约 1.5 万丛草，岛下方是一片飘动的云海（`clouds.hlsl`，程序化噪声，远处融入天空）。每种植被一次实例化绘制（Instance Buffer 存位置 / 缩放 / 朝向 / 色调 / 风力），顶点着色器里做风吹摆动，阴影 Pass 用同一函数，所以影子跟着摆。
 
 1. **阴影 Pass**：从太阳方向用正交投影渲染场景深度到 2048² 阴影贴图（深度偏移防止自阴影）。
-2. **主 Pass**：GGX / Smith / Schlick 的金属度-粗糙度 PBR，3×3 PCF 阴影，半球环境光，输出线性 HDR 到离屏 RGBA16F 图像。
+2. **主 Pass**：GGX / Smith / Schlick 的金属度-粗糙度 PBR，3×3 PCF 阴影，半球环境光，输出线性 HDR 到离屏 RGBA16F 图像；最后画云海（深度测试，被岛挡住的像素直接跳过）。
 3. **合成 Pass**：全屏三角形读取 HDR 图像，背景处（alpha = 0）按视线方向画天空渐变和太阳，再做曝光和 ACES 色调映射，写入 sRGB 交换链。
 4. **UI Pass**：在合成结果上叠加 ImGui（loadOp = LOAD）。
 

@@ -2,9 +2,13 @@
 
 #include "rhi/VkCheck.h"
 #include "rhi/VulkanContext.h"
+#include "scene/Camera.h"
+#include "scene/IslandMesh.h"
 
 #include <GLFW/glfw3.h>
 
+#include <cstddef>
+#include <cstdio>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -27,8 +31,8 @@ VkShaderModule loadShader(VkDevice device, const std::string& path) {
     return module;
 }
 
-void transitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
-                     VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+void transitionImage(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect, VkImageLayout oldLayout,
+                     VkImageLayout newLayout, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                      VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
     VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     barrier.srcStageMask = srcStage;
@@ -40,7 +44,7 @@ void transitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    barrier.subresourceRange = {aspect, 0, 1, 0, 1};
 
     VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dep.imageMemoryBarrierCount = 1;
@@ -54,12 +58,16 @@ VkExtent2D framebufferExtent(GLFWwindow* window) {
     return {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
 }
 
+constexpr VkPipelineStageFlags2 kDepthStages =
+    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+
 }  // namespace
 
 void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
     ctx_ = &ctx;
     window_ = window;
     swapchain_.create(ctx, framebufferExtent(window));
+    createDepthImage();
     createFrameResources();
     createPresentSemaphores();
     createPipeline();
@@ -67,6 +75,8 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
 
 void Renderer::shutdown() {
     VkDevice device = ctx_->device;
+    destroyBuffer(ctx_->allocator, mesh_.vertices);
+    destroyBuffer(ctx_->allocator, mesh_.indices);
     vkDestroyPipeline(device, pipeline_, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
     destroyPresentSemaphores();
@@ -76,7 +86,20 @@ void Renderer::shutdown() {
         vkDestroyCommandPool(device, f.commandPool, nullptr);  // also frees its command buffer
         f = FrameData{};
     }
+    destroyImage(*ctx_, depth_);
     swapchain_.destroy(device);
+}
+
+void Renderer::loadMesh(const MeshData& mesh) {
+    destroyBuffer(ctx_->allocator, mesh_.vertices);
+    destroyBuffer(ctx_->allocator, mesh_.indices);
+    mesh_.vertices = uploadBuffer(*ctx_, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
+                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    mesh_.indices = uploadBuffer(*ctx_, mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    mesh_.indexCount = static_cast<uint32_t>(mesh.indices.size());
+    std::printf("Mesh: %zu vertices, %zu triangles\n", mesh.vertices.size(), mesh.indices.size() / 3);
+    std::fflush(stdout);
 }
 
 void Renderer::createFrameResources() {
@@ -113,10 +136,15 @@ void Renderer::destroyPresentSemaphores() {
     renderFinished_.clear();
 }
 
+void Renderer::createDepthImage() {
+    depth_ =createImage(*ctx_, swapchain_.extent, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                         VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
 void Renderer::createPipeline() {
     VkDevice device = ctx_->device;
-    VkShaderModule vs = loadShader(device, FI_SHADER_DIR "/triangle.vs.spv");
-    VkShaderModule ps = loadShader(device, FI_SHADER_DIR "/triangle.ps.spv");
+    VkShaderModule vs = loadShader(device, FI_SHADER_DIR "/mesh.vs.spv");
+    VkShaderModule ps = loadShader(device, FI_SHADER_DIR "/mesh.ps.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -128,7 +156,19 @@ void Renderer::createPipeline() {
     stages[1].module = ps;
     stages[1].pName = "PSMain";
 
+    // One interleaved vertex buffer: position, normal, color (see Vertex).
+    VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attributes[3] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
+        {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
+    };
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.pVertexAttributeDescriptions = attributes;
+
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
@@ -141,14 +181,20 @@ void Renderer::createPipeline() {
     dynamic.dynamicStateCount = 2;
     dynamic.pDynamicStates = dynamicStates;
 
+    // Meshes wind counter-clockwise; with the Y-flipped projection they stay CCW on screen.
     VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;
-    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    raster.cullMode = VK_CULL_MODE_BACK_BIT;
+    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     raster.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depth.depthTestEnable = VK_TRUE;
+    depth.depthWriteEnable = VK_TRUE;
+    depth.depthCompareOp = VK_COMPARE_OP_LESS;
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -157,13 +203,19 @@ void Renderer::createPipeline() {
     blend.attachmentCount = 1;
     blend.pAttachments = &blendAttachment;
 
+    // Per-draw data small enough for push constants (Vulkan guarantees at least 128 bytes).
+    VkPushConstantRange pushRange{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                  sizeof(PushConstants)};
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
     VK_CHECK(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout_));
 
     // Dynamic rendering: the pipeline names its attachment formats instead of a VkRenderPass.
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachmentFormats = &swapchain_.format;
+    rendering.depthAttachmentFormat = kDepthFormat;
 
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     info.pNext = &rendering;
@@ -174,6 +226,7 @@ void Renderer::createPipeline() {
     info.pViewportState = &viewport;
     info.pRasterizationState = &raster;
     info.pMultisampleState = &multisample;
+    info.pDepthStencilState = &depth;
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = pipelineLayout_;
@@ -195,8 +248,10 @@ void Renderer::recreateSwapchain() {
     vkDeviceWaitIdle(ctx_->device);
     const VkFormat oldFormat = swapchain_.format;
     destroyPresentSemaphores();
+    destroyImage(*ctx_, depth_);
     swapchain_.destroy(ctx_->device);
     swapchain_.create(*ctx_, size);
+    createDepthImage();
     createPresentSemaphores();
     if (swapchain_.format != oldFormat) {
         throw std::runtime_error("Swapchain format changed; pipeline would need rebuilding");
@@ -204,7 +259,7 @@ void Renderer::recreateSwapchain() {
     framebufferResized_ = false;
 }
 
-void Renderer::drawFrame() {
+void Renderer::drawFrame(const Camera& camera) {
     FrameData& frame = frames_[frameIndex_];
     VkDevice device = ctx_->device;
 
@@ -225,8 +280,12 @@ void Renderer::drawFrame() {
     VK_CHECK(vkResetFences(device, 1, &frame.inFlight));
 
     // 3. Record this frame's commands.
+    const float aspect = static_cast<float>(swapchain_.extent.width) / static_cast<float>(swapchain_.extent.height);
+    PushConstants constants{};
+    constants.viewProj = camera.projection(aspect) * camera.view();
+    constants.sunDirection = glm::vec4(sunDirection, 0.0f);
     VK_CHECK(vkResetCommandPool(device, frame.commandPool, 0));
-    recordCommands(frame.commandBuffer, imageIndex);
+    recordCommands(frame.commandBuffer, imageIndex, constants);
 
     // 4. Submit: start writing color only after the image is acquired; signal when done.
     VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
@@ -264,29 +323,43 @@ void Renderer::drawFrame() {
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 }
 
-void Renderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
+void Renderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex, const PushConstants& constants) {
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
 
     VkImage image = swapchain_.images[imageIndex];
     // Previous contents don't matter (we clear), so transition from UNDEFINED.
-    transitionImage(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_NONE,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    transitionImage(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    // The depth image is shared by all frames: wait for the previous frame's depth writes first.
+    transitionImage(cmd, depth_.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, kDepthStages,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, kDepthStages,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = swapchain_.views[imageIndex];
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color = {{0.02f, 0.05f, 0.10f, 1.0f}};  // deep sea blue (linear)
+    color.clearValue.color = {{0.30f, 0.52f, 0.85f, 1.0f}};  // sky blue (linear)
+
+    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = depth_.view;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;  // not needed after this frame
+    depth.clearValue.depthStencil = {1.0f, 0};
 
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
     rendering.renderArea = {{0, 0}, swapchain_.extent};
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
+    rendering.pDepthAttachment = &depth;
     vkCmdBeginRendering(cmd, &rendering);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
@@ -295,14 +368,22 @@ void Renderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkRect2D scissor{{0, 0}, swapchain_.extent};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    if (mesh_.indexCount > 0) {
+        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(PushConstants), &constants);
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &mesh_.vertices.buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, mesh_.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, mesh_.indexCount, 1, 0, 0, 0);
+    }
 
     vkCmdEndRendering(cmd);
 
     // Hand the image to the presentation engine; the present waits on our semaphore.
-    transitionImage(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
+    transitionImage(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
 
     VK_CHECK(vkEndCommandBuffer(cmd));
 }

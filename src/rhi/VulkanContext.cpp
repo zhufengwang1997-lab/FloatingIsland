@@ -83,9 +83,14 @@ void VulkanContext::init(GLFWwindow* window) {
     VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
     pickPhysicalDevice();
     createDevice();
+    createAllocator();
+    createUploadResources();
 }
 
 void VulkanContext::shutdown() {
+    if (uploadFence_) vkDestroyFence(device, uploadFence_, nullptr);
+    if (uploadPool_) vkDestroyCommandPool(device, uploadPool_, nullptr);
+    if (allocator) vmaDestroyAllocator(allocator);
     if (device) vkDestroyDevice(device, nullptr);
     if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
     if (debugMessenger_) {
@@ -228,4 +233,46 @@ void VulkanContext::createDevice() {
     VK_CHECK(vkCreateDevice(physicalDevice, &info, nullptr, &device));
 
     vkGetDeviceQueue(device, graphicsQueueFamily, 0, &graphicsQueue);
+}
+
+void VulkanContext::createAllocator() {
+    VmaAllocatorCreateInfo info{};
+    info.vulkanApiVersion = VK_API_VERSION_1_3;
+    info.instance = instance;
+    info.physicalDevice = physicalDevice;
+    info.device = device;
+    VK_CHECK(vmaCreateAllocator(&info, &allocator));
+}
+
+void VulkanContext::createUploadResources() {
+    VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    poolInfo.queueFamilyIndex = graphicsQueueFamily;
+    VK_CHECK(vkCreateCommandPool(device, &poolInfo, nullptr, &uploadPool_));
+
+    VkCommandBufferAllocateInfo allocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    allocInfo.commandPool = uploadPool_;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &uploadCmd_));
+
+    VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VK_CHECK(vkCreateFence(device, &fenceInfo, nullptr, &uploadFence_));
+}
+
+void VulkanContext::immediateSubmit(const std::function<void(VkCommandBuffer)>& record) {
+    VK_CHECK(vkResetCommandPool(device, uploadPool_, 0));
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(uploadCmd_, &begin));
+    record(uploadCmd_);
+    VK_CHECK(vkEndCommandBuffer(uploadCmd_));
+
+    VkCommandBufferSubmitInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = uploadCmd_;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
+    VK_CHECK(vkQueueSubmit2(graphicsQueue, 1, &submit, uploadFence_));
+    VK_CHECK(vkWaitForFences(device, 1, &uploadFence_, VK_TRUE, UINT64_MAX));
+    VK_CHECK(vkResetFences(device, 1, &uploadFence_));
 }

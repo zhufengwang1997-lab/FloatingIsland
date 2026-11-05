@@ -12,19 +12,33 @@ endif()
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
+include(FetchContent)
 find_package(Vulkan 1.3 REQUIRED)
 
-# GLFW: use an installed package when there is one (Homebrew on macOS),
+# GLFW and GLM: use an installed package when there is one (Homebrew on macOS),
 # otherwise download and build it (e.g. on Windows).
 find_package(glfw3 3.4 CONFIG QUIET)
 if(NOT glfw3_FOUND)
-  include(FetchContent)
   set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.4)
+  FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.4 SYSTEM)
   FetchContent_MakeAvailable(glfw)
 endif()
+
+find_package(glm 1.0 CONFIG QUIET)
+if(NOT glm_FOUND)
+  FetchContent_Declare(glm GIT_REPOSITORY https://github.com/g-truc/glm.git GIT_TAG 1.0.3 SYSTEM)
+  FetchContent_MakeAvailable(glm)
+endif()
+
+# Vulkan Memory Allocator (header-only) is not packaged by Homebrew, so always fetch it.
+FetchContent_Declare(vma
+  GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+  GIT_TAG v3.5.0
+  GIT_SHALLOW TRUE
+  SYSTEM)
+FetchContent_MakeAvailable(vma)
 
 # DXC compiles HLSL to SPIR-V. Looks in the Vulkan SDK first, then the local source build.
 find_program(DXC_EXECUTABLE dxc
@@ -55,8 +69,8 @@ function(add_hlsl_shader source stage entry)
   set(SHADER_OUTPUTS ${SHADER_OUTPUTS} "${output}" PARENT_SCOPE)
 endfunction()
 
-add_hlsl_shader(shaders/triangle.hlsl vs VSMain)
-add_hlsl_shader(shaders/triangle.hlsl ps PSMain)
+add_hlsl_shader(shaders/mesh.hlsl vs VSMain)
+add_hlsl_shader(shaders/mesh.hlsl ps PSMain)
 add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 
 # ---------------------------------------------------------------------------
@@ -67,15 +81,26 @@ add_executable(FloatingIsland
   src/app/App.cpp
   src/rhi/VulkanContext.cpp
   src/rhi/Swapchain.cpp
-  src/renderer/Renderer.cpp)
+  src/rhi/Resources.cpp
+  src/rhi/VmaImpl.cpp
+  src/renderer/Renderer.cpp
+  src/scene/Camera.cpp
+  src/scene/IslandMesh.cpp)
 
 add_dependencies(FloatingIsland shaders)
 target_include_directories(FloatingIsland PRIVATE src)
-target_link_libraries(FloatingIsland PRIVATE Vulkan::Vulkan glfw)
+target_link_libraries(FloatingIsland PRIVATE Vulkan::Vulkan glfw glm::glm GPUOpen::VulkanMemoryAllocator)
 target_compile_definitions(FloatingIsland PRIVATE
   GLFW_INCLUDE_NONE
+  GLM_FORCE_RADIANS
+  GLM_FORCE_DEPTH_ZERO_TO_ONE   # Vulkan depth range is [0, 1], not OpenGL's [-1, 1]
   FI_SHADER_DIR="${SHADER_OUT_DIR}"
   $<$<CONFIG:Debug>:FI_ENABLE_VALIDATION>)
+
+# VMA's implementation file is third-party code; don't hold it to our warning level.
+if(NOT MSVC)
+  set_source_files_properties(src/rhi/VmaImpl.cpp PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 
 if(MSVC)
   target_compile_options(FloatingIsland PRIVATE /W4 /utf-8)

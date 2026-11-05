@@ -1,5 +1,7 @@
 #include "app/App.h"
 
+#include "scene/IslandMesh.h"
+
 #include <vulkan/vulkan.h>
 
 #include <GLFW/glfw3.h>
@@ -33,15 +35,20 @@ void App::init() {
 
     ctx_.init(window_);
     renderer_.init(ctx_, window_);
+    renderer_.loadMesh(generateIsland());
 }
 
 void App::mainLoop(int maxFrames) {
     double lastTitleUpdate = glfwGetTime();
+    double lastFrame = lastTitleUpdate;
     int frames = 0;
     int totalFrames = 0;
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
-        renderer_.drawFrame();
+        const double frameStart = glfwGetTime();
+        camera_.update(window_, static_cast<float>(frameStart - lastFrame));
+        lastFrame = frameStart;
+        renderer_.drawFrame(camera_);
         if (maxFrames > 0 && ++totalFrames >= maxFrames) break;
 
         // Average frame time in the title bar, refreshed twice a second.

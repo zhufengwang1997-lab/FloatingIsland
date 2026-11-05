@@ -2,6 +2,7 @@
 
 #include "renderer/Renderer.h"
 #include "rhi/VulkanContext.h"
+#include "scene/Camera.h"
 
 struct GLFWwindow;
 
@@ -19,4 +20,5 @@ private:
     GLFWwindow* window_ = nullptr;
     VulkanContext ctx_;
     Renderer renderer_;
+    Camera camera_;
 };

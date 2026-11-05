@@ -27,6 +27,8 @@ ninja -C build
 ./build/FloatingIsland            # Esc 退出；--frames N 跑 N 帧后自动退出
 ```
 
+操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速。
+
 macOS 上用 Homebrew 安装的验证层时，需要让动态库加载器能找到它：
 
 ```bash
@@ -38,8 +40,9 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 | 目录 | 内容 |
 | --- | --- |
 | `src/app` | 窗口与主循环 |
-| `src/rhi` | Vulkan 底层封装：Instance / Device / 队列（`VulkanContext`）、交换链（`Swapchain`） |
+| `src/rhi` | Vulkan 底层封装：Instance / Device / 队列 / VMA（`VulkanContext`）、交换链（`Swapchain`）、Buffer 与 Image（`Resources`） |
 | `src/renderer` | 每帧的命令录制、同步与提交（`Renderer`） |
+| `src/scene` | 相机（`Camera`）、程序化生成的浮空岛网格（`IslandMesh`） |
 | `shaders` | HLSL Shader，构建时由 DXC 编译到 `build/shaders/*.spv` |
 
 ## 文档

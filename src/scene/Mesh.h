@@ -17,7 +17,8 @@ struct Vertex {
 // Matches InstanceInput in shaders/common.hlsli.
 struct InstanceData {
     glm::vec4 positionScale{0.0f, 0.0f, 0.0f, 1.0f};  // xyz: position in object space, w: uniform scale
-    glm::vec4 params{0.0f, 1.0f, 0.0f, 0.0f};         // x: yaw (radians), y: color tint, z: wind sway, w: unused
+    glm::vec4 params{0.0f, 1.0f, 0.0f, -1.0f};        // x: yaw (radians), y: color tint, z: wind sway, w: LOD rank
+    // (LOD rank, 0..1: distance LOD drops instances with high ranks first; negative: no LOD)
 };
 
 struct MeshData {

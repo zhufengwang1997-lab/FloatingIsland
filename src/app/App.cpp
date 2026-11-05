@@ -21,12 +21,15 @@ void App::run(const AppOptions& options) {
         init(false, options);
         renderer_.sceneRepeat = static_cast<uint32_t>(std::max(options.sceneRepeat, 1));
         renderer_.frustumCulling = options.frustumCulling;
+        renderer_.distanceLod = options.distanceLod;
         ui_.visible = false;
         mainLoop(benchmark.totalFrames(), options.screenshotPath, &benchmark);
         benchmark.report();
     } else {
         init(options.vsync, options);
         renderer_.frustumCulling = options.frustumCulling;
+        renderer_.distanceLod = options.distanceLod;
+        ui_.visible = options.showUi;
         mainLoop(options.maxFrames, options.screenshotPath, nullptr);
     }
     shutdown();
@@ -75,7 +78,8 @@ void App::loadScene(const AppOptions& options) {
     // Vegetation: one instanced draw call per kind.
     for (const VegetationKind& kind : generateVegetation({}, 11, options.grassDensity)) {
         const bool castsShadow = kind.castsShadow || options.grassShadows;
-        const uint32_t index = renderer_.addInstanced(kind.mesh, kind.instances, kind.twoSided, kind.name);
+        const uint32_t index = renderer_.addInstanced(kind.mesh, kind.instances, kind.twoSided, kind.name, 8.0f,
+                                                      kind.distanceLod);
         std::printf("%s: %zu instances x %zu triangles, %u chunks%s\n", kind.name.c_str(), kind.instances.size(),
                     kind.mesh.indices.size() / 3, renderer_.objectChunks(index), castsShadow ? "" : " (no shadow)");
         renderer_.objectCastsShadow(index) = castsShadow;

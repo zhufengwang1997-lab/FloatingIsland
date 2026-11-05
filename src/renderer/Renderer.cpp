@@ -165,7 +165,7 @@ uint32_t Renderer::addObject(const MeshData& mesh, const glm::mat4& model, std::
 }
 
 uint32_t Renderer::addInstanced(const MeshData& mesh, const std::vector<InstanceData>& instances, bool twoSided,
-                                std::string name, float chunkSize) {
+                                std::string name, float chunkSize, bool distanceLod) {
     if (instances.empty()) throw std::runtime_error("addInstanced: no instances for " + name);
     const uint32_t index = addObject(mesh, glm::mat4(1.0f), std::move(name));  // one chunk, replaced below
     RenderObject& o = objects_[index];
@@ -198,7 +198,8 @@ uint32_t Renderer::addInstanced(const MeshData& mesh, const std::vector<Instance
         Chunk& chunk = o.chunks.back();
         ++chunk.range.instanceCount;
         const glm::vec3 p{d.positionScale};
-        const float s = d.positionScale.w;
+        // Distance LOD can grow an instance by up to kMaxLodGrowth (LodScale in the shader).
+        const float s = d.positionScale.w * (distanceLod ? kMaxLodGrowth : 1.0f);
         chunk.bounds.expand(p + glm::vec3(-radius * s, minY * s, -radius * s));
         chunk.bounds.expand(p + glm::vec3(radius * s, maxY * s, radius * s));
         // Matches InstanceToWorld in shaders/common.hlsli: sway = wind * y^2 * scale * gust, with
@@ -206,6 +207,25 @@ uint32_t Renderer::addInstanced(const MeshData& mesh, const std::vector<Instance
         chunk.swayReach = std::max(chunk.swayReach, d.params.z * maxY * maxY * s * 1.3f);
     }
 
+    if (distanceLod) {
+        // Shuffle each chunk and rank its instances 0..1: distance LOD keeps a prefix of the chunk
+        // (the lowest ranks), and a shuffled prefix is a random, even thinning of the chunk.
+        uint32_t state = 0x9E3779B9u;
+        auto next = [&]() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            return state;
+        };
+        for (const Chunk& c : o.chunks) {
+            InstanceData* first = sorted.data() + c.range.firstInstance;
+            for (uint32_t i = c.range.instanceCount; i > 1; --i) std::swap(first[i - 1], first[next() % i]);
+            for (uint32_t i = 0; i < c.range.instanceCount; ++i) {
+                first[i].params.w = static_cast<float>(i) / static_cast<float>(c.range.instanceCount);
+            }
+        }
+    }
+    o.distanceLod = distanceLod;
     o.instances = uploadBuffer(*ctx_, sorted.data(), sorted.size() * sizeof(InstanceData),
                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     o.instanceCount = static_cast<uint32_t>(sorted.size());
@@ -518,6 +538,10 @@ void Renderer::drawFrame(const Camera& camera) {
     uniforms.params = glm::vec4(exposure, 1.0f / static_cast<float>(kShadowMapSize),
                                 timeOverride >= 0.0f ? timeOverride : static_cast<float>(glfwGetTime() - startTime_),
                                 windStrength);
+    // Disabled LOD: start beyond any view distance, so every instance keeps its full size.
+    lodMinFraction = std::clamp(lodMinFraction, kMinLodFraction, 1.0f);
+    uniforms.lod = distanceLod ? glm::vec4(lodStart, std::max(lodEnd, lodStart + 1.0f), lodMinFraction, kLodFade)
+                               : glm::vec4(1e9f, 2e9f, 1.0f, kLodFade);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
     VK_CHECK(vmaFlushAllocation(ctx_->allocator, frame.uniforms.allocation, 0, sizeof(uniforms)));
 
@@ -530,7 +554,7 @@ void Renderer::drawFrame(const Camera& camera) {
     const bool capture = !capturePath_.empty();
     stats_ = FrameStats{};
     if (!freezeCulling) cullViewProj_ = uniforms.viewProj;
-    cullObjects(cullViewProj_);
+    cullObjects(cullViewProj_, camera.position);
     profiler_.reset(cmd, frameIndex_);
     profiler_.begin(cmd, frameIndex_, GpuScope::Frame);
 
@@ -633,7 +657,14 @@ void appendDraw(std::vector<Range>& draws, const Range& r) {
 
 }  // namespace
 
-void Renderer::cullObjects(const glm::mat4& viewProj) {
+float Renderer::lodFraction(float distance) const {
+    if (!distanceLod) return 1.0f + kLodFade;
+    const float end = std::max(lodEnd, lodStart + 1.0f);
+    const float t = std::clamp((distance - lodStart) / (end - lodStart), 0.0f, 1.0f);
+    return (1.0f + kLodFade) + t * (lodMinFraction - (1.0f + kLodFade));
+}
+
+void Renderer::cullObjects(const glm::mat4& viewProj, glm::vec3 cameraPosition) {
     const Frustum frustum = extractFrustum(viewProj);
     // A chunk's shadow falls away from the sun. Stretch its box that way, far enough to cross the
     // whole shadow volume: if even the stretched box misses the view, so does the shadow.
@@ -649,16 +680,26 @@ void Renderer::cullObjects(const glm::mat4& viewProj) {
             const float sway = c.swayReach * windStrength;
             box.min -= glm::vec3(sway, 0.0f, sway);
             box.max += glm::vec3(sway, 0.0f, sway);
+            DrawRange range = c.range;
+            if (o.distanceLod) {
+                // The nearest point of the box keeps the largest fraction; instances ranked above it
+                // have shrunk to nothing everywhere in the chunk, so they need not be drawn at all.
+                const glm::vec3 nearest = glm::clamp(cameraPosition, box.min, box.max);
+                const float fraction = lodFraction(glm::length(nearest - cameraPosition));
+                const auto keep = static_cast<uint32_t>(std::ceil(fraction * static_cast<float>(range.instanceCount)));
+                range.instanceCount = std::min(range.instanceCount, keep);
+            }
             if (!frustumCulling || intersects(frustum, box)) {
                 ++stats_.chunksVisible;
-                appendDraw(o.mainDraws, c.range);
+                stats_.instancesDrawn += range.instanceCount;
+                appendDraw(o.mainDraws, range);
             }
             if (!o.castsShadow) continue;
             Aabb swept = box;
             swept.expand(Aabb{box.min + shadowReach, box.max + shadowReach});
             if (!frustumCulling || intersects(frustum, swept)) {
                 ++stats_.shadowChunksVisible;
-                appendDraw(o.shadowDraws, c.range);
+                appendDraw(o.shadowDraws, range);
             }
         }
     }

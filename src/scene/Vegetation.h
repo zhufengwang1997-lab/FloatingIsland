@@ -15,6 +15,8 @@ struct VegetationKind {
     // Grass is left out of the shadow map by default: thousands of tiny tufts cost a lot in the shadow
     // pass but their shadows are a few texels, mostly lost in the 2048^2 map's resolution anyway.
     bool castsShadow = true;
+    // Thinned out with distance (Renderer distance LOD): far away, single tufts are a few pixels.
+    bool distanceLod = false;
 };
 
 // Pine trees, broadleaf trees, rocks and grass tufts scattered over the island's top surface.

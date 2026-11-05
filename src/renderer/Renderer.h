@@ -32,6 +32,7 @@ struct FrameStats {
     uint32_t chunksVisible = 0;        // drawn in the main pass, after frustum culling
     uint32_t shadowChunksVisible = 0;  // drawn in the shadow pass (of the chunks that cast shadows)
     uint32_t shadowChunksTotal = 0;
+    uint64_t instancesDrawn = 0;        // main pass
 };
 
 // Draws the scene in four passes per frame:
@@ -54,8 +55,9 @@ public:
     // Adds a mesh drawn once per instance. twoSided disables back-face culling (thin geometry such as
     // grass blades). The instances are grouped into square chunks of chunkSize world units; the main
     // pass draws only the chunks inside the camera frustum. Returns its object index.
+    // distanceLod: draw fewer of the instances the further away they are (see lodStart and friends).
     uint32_t addInstanced(const MeshData& mesh, const std::vector<InstanceData>& instances, bool twoSided,
-                          std::string name, float chunkSize = 8.0f);
+                          std::string name, float chunkSize = 8.0f, bool distanceLod = false);
     // The sphere that must fit inside the shadow map.
     void setShadowBounds(glm::vec3 center, float radius);
     void drawFrame(const Camera& camera);
@@ -84,6 +86,12 @@ public:
     // Debug: keep culling against the frustum of the moment this was switched on, so you can fly
     // out and look at what is (not) being drawn.
     bool freezeCulling = false;
+    // Distance LOD for objects added with distanceLod (the grass): all instances up to lodStart, then
+    // fewer and fewer, down to lodMinFraction of them from lodEnd on. Dropped instances shrink away.
+    bool distanceLod = true;
+    float lodStart = 35.0f;
+    float lodEnd = 110.0f;
+    float lodMinFraction = 0.25f;  // clamped to >= kMinLodFraction
 
     // Objects, for the debug UI.
     uint32_t objectCount() const { return static_cast<uint32_t>(objects_.size()); }
@@ -113,6 +121,7 @@ private:
         glm::vec4 sunDirection;
         glm::vec4 sunColor;
         glm::vec4 params;  // x: exposure, y: 1 / shadow map size
+        glm::vec4 lod;     // x: start, y: end distance, z: fraction kept at the end, w: fade width
     };
 
     // Everything the CPU must not touch again until the GPU has finished that frame.
@@ -150,6 +159,7 @@ private:
         bool twoSided = false;
         bool visible = true;
         bool castsShadow = true;  // drawn into the shadow map
+        bool distanceLod = false; // instances in each chunk are shuffled and ranked (InstanceData::params.w)
         std::string name;
         // Instances (or triangles) sorted by chunk, so each chunk is one contiguous range.
         std::vector<Chunk> chunks;
@@ -172,7 +182,11 @@ private:
     // shadowPass: the caller has bound the shadow pipeline; otherwise pick mesh / foliage per object.
     void drawObjects(VkCommandBuffer cmd, bool shadowPass);
     // Fills every object's mainDraws and shadowDraws for this frame.
-    void cullObjects(const glm::mat4& viewProj);
+    void cullObjects(const glm::mat4& viewProj, glm::vec3 cameraPosition);
+    static constexpr float kMinLodFraction = 0.2f;  // 0.2^-0.3 = 1.62 <= kMaxLodGrowth
+    static constexpr float kLodFade = 0.1f;  // rank range over which a dropped instance shrinks away
+    static constexpr float kMaxLodGrowth = 1.65f;  // LodScale's growth (fraction^-0.3) at the smallest lodMinFraction
+    float lodFraction(float distance) const;  // matches LodFraction in shaders/common.hlsli
     void recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set);
     void recordMainPass(VkCommandBuffer cmd, VkDescriptorSet set);
     void recordCompositePass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set);

@@ -15,6 +15,8 @@
 //   --grass-density D multiply the number of grass tufts by D (default 1)
 //   --grass-shadows   also draw grass into the shadow map (off by default)
 //   --no-culling      draw every chunk, also those outside the camera view
+//   --no-lod          draw all grass at every distance
+//   --no-ui           start with the debug panel hidden (F1 / H shows it)
 //   --repeat K        with --benchmark: draw the scene passes K times per frame (default 16) so the
 //                     GPU stays fully loaded; reported shadow / main times are per single pass
 int main(int argc, char** argv) {
@@ -30,6 +32,8 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--grass-density") == 0 && hasValue) options.grassDensity = std::strtof(argv[++i], nullptr);
         else if (std::strcmp(argv[i], "--grass-shadows") == 0) options.grassShadows = true;
         else if (std::strcmp(argv[i], "--no-culling") == 0) options.frustumCulling = false;
+        else if (std::strcmp(argv[i], "--no-lod") == 0) options.distanceLod = false;
+        else if (std::strcmp(argv[i], "--no-ui") == 0) options.showUi = false;
         else std::fprintf(stderr, "Ignoring unknown argument %s\n", argv[i]);
     }
     try {

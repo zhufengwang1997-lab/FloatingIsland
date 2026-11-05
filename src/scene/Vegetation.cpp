@@ -188,7 +188,7 @@ void scatter(const IslandParams& island, float spacing, uint32_t seed, F&& visit
 InstanceData makeInstance(float x, float y, float z, float scale, float yaw, float tint, float wind) {
     InstanceData d;
     d.positionScale = {x, y, z, scale};
-    d.params = {yaw, tint, wind, 0.0f};
+    d.params = {yaw, tint, wind, -1.0f};  // no LOD rank; the renderer ranks distance-LOD kinds
     return d;
 }
 
@@ -198,7 +198,7 @@ std::vector<VegetationKind> generateVegetation(const IslandParams& island, uint3
     VegetationKind pines{"Pine trees", makePine(), {}, false};
     VegetationKind broadleaves{"Broadleaf trees", makeBroadleaf(), {}, false};
     VegetationKind rocks{"Rocks", makeRock(), {}, false};
-    VegetationKind grass{"Grass", makeGrassTuft(), {}, true, false};
+    VegetationKind grass{"Grass", makeGrassTuft(), {}, true, false, true};
     const float twoPi = glm::two_pi<float>();
 
     // Trees: in forest patches (low-frequency noise), on gentle green slopes away from the beach.

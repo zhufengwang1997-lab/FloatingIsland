@@ -12,6 +12,8 @@ struct FrameData
     float4 sunDirection;      // xyz: unit vector towards the sun
     float4 sunColor;          // rgb: color * intensity
     float4 params;            // x: exposure, y: 1 / shadow map size, z: time (s), w: wind strength
+    float4 lod;               // distance LOD: x: start distance, y: end distance, z: fraction kept at
+                              // the end, w: fade width (in rank units)
 };
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
@@ -42,8 +44,28 @@ float3 SkyRadiance(float3 dir)
 struct InstanceInput
 {
     [[vk::location(4)]] float4 positionScale : INSTANCE_POSITION;  // xyz: offset, w: uniform scale
-    [[vk::location(5)]] float4 params : INSTANCE_PARAMS;           // x: yaw, y: tint, z: wind sway
+    [[vk::location(5)]] float4 params : INSTANCE_PARAMS;           // x: yaw, y: tint, z: wind sway, w: LOD rank
 };
+
+// Distance LOD: the fraction of instances kept at a distance, from 1 + fade (all of them, fully
+// grown) at lod.x down to lod.z at lod.y and beyond. Must match Renderer::lodFraction on the CPU.
+float LodFraction(float distance)
+{
+    float t = saturate((distance - frame.lod.x) / max(frame.lod.y - frame.lod.x, 1e-3));
+    return lerp(1.0 + frame.lod.w, frame.lod.z, t);
+}
+
+// The scale of an instance under distance LOD. Instances are dropped in rank order; each one shrinks
+// to nothing over a short fade instead of popping out. The ones left grow a little (fraction^-0.3),
+// so the thinner grass still covers most of the ground; growing by the full 1 / sqrt(fraction) keeps
+// the coverage exactly but makes the tufts look coarse. A negative rank means no LOD.
+float LodScale(float3 position, float rank)
+{
+    if (rank < 0.0) return 1.0;
+    float fraction = LodFraction(distance(position, frame.cameraPosition.xyz));
+    float grow = pow(clamp(fraction, frame.lod.z, 1.0), -0.3);
+    return saturate((fraction - rank) / frame.lod.w) * grow;
+}
 
 float3 RotateYaw(float3 v, float yaw)
 {
@@ -56,12 +78,13 @@ float3 RotateYaw(float3 v, float yaw)
 // so shadows move with the foliage.
 float3 InstanceToWorld(float3 localPos, InstanceInput inst)
 {
-    float3 p = RotateYaw(localPos, inst.params.x) * inst.positionScale.w + inst.positionScale.xyz;
+    float scale = inst.positionScale.w * LodScale(inst.positionScale.xyz, inst.params.w);
+    float3 p = RotateYaw(localPos, inst.params.x) * scale + inst.positionScale.xyz;
     float3 world = mul(object.model, float4(p, 1.0)).xyz;
 
     // Sway grows with the square of the height above the instance origin, so the base stays put.
     // Two sine waves with a phase that travels across the island read as gusts.
-    float sway = inst.params.z * frame.params.w * localPos.y * localPos.y * inst.positionScale.w;
+    float sway = inst.params.z * frame.params.w * localPos.y * localPos.y * scale;
     float phase = dot(world.xz, float2(0.13, 0.09));
     float t = frame.params.z;
     float gust = 0.6 * sin(t * 1.3 + phase) + 0.3 * sin(t * 2.9 + phase * 2.1) + 0.4;

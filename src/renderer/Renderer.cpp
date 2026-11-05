@@ -70,10 +70,22 @@ void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 srcStage, VkAccess
     vkCmdPipelineBarrier2(cmd, &dep);
 }
 
-// The parts of the sky the IBL cube maps depend on (the moon and stars are not in them).
-bool sameSky(const SkyState& a, const SkyState& b) {
-    return a.zenith == b.zenith && a.horizon == b.horizon && a.below == b.below && a.glow == b.glow &&
-           a.sunDirection == b.sunDirection && a.sunDisk == b.sunDisk;
+// Whether the IBL cube maps made from sky b still do for sky a: the sun has moved less than 0.2
+// degrees and no sky color changed by more than 2% of the sky's brightness. Ambient light changes
+// slowly, so with the day cycle running this remakes the maps every few frames instead of every
+// frame, without visible steps. (Only what the maps are made from counts; the moon and stars are
+// not in them.) The tolerance is relative to the whole sky, not to each color: the sunset glow, for
+// one, fades to almost nothing by day, and 1% of almost nothing would be no tolerance at all.
+bool closeSky(const SkyState& a, const SkyState& b) {
+    const glm::vec3 bright = glm::max(b.zenith, b.horizon);
+    const float tolerance = 0.02f * std::max({bright.x, bright.y, bright.z, 0.001f});
+    auto close = [&](glm::vec3 x, glm::vec3 y) {
+        const glm::vec3 d = glm::abs(x - y);
+        return std::max({d.x, d.y, d.z}) <= tolerance;
+    };
+    return glm::dot(a.sunDirection, b.sunDirection) >= std::cos(glm::radians(0.2f)) && close(a.zenith, b.zenith) &&
+           close(a.horizon, b.horizon) && close(a.below, b.below) && close(a.glow, b.glow) &&
+           close(a.sunDisk * 0.08f, b.sunDisk * 0.08f);  // only the halo is in the maps (SkyRadiance)
 }
 
 constexpr VkPipelineStageFlags2 kDepthStages =
@@ -694,9 +706,11 @@ void Renderer::recordIblUpdate(VkCommandBuffer cmd, const FrameData& frame) {
                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     for (uint32_t m = 0; m < kSpecularMips; ++m) {
         const float roughness = static_cast<float>(m) / static_cast<float>(kSpecularMips - 1);
-        dispatch(iblPrefilterPipeline_, 1 + m, {kEnvSize >> m, roughness, 64, 0});
+        // The sky (without the sun disk) is smooth, so few samples suffice: 32 per texel here and 64
+        // for the irradiance look the same as 64 and 256, at about half the cost.
+        dispatch(iblPrefilterPipeline_, 1 + m, {kEnvSize >> m, roughness, 32, 0});
     }
-    dispatch(iblIrradiancePipeline_, kIblSets - 1, {kIrradianceSize, 0.0f, 256, 0});
+    dispatch(iblIrradiancePipeline_, kIblSets - 1, {kIrradianceSize, 0.0f, 64, 0});
 
     // Done before the main pass's fragment shaders sample them.
     memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -809,11 +823,12 @@ void Renderer::drawFrame(const Camera& camera) {
     // Timed every frame (empty when nothing changed): the profiler reads all of a frame's queries
     // at once, and one never written would hold up the rest.
     profiler_.begin(cmd, frameIndex_, GpuScope::Ibl);
-    if (iblEveryFrame || !iblValid_ || !sameSky(sky, iblSky_)) {
+    if (iblEveryFrame || !iblValid_ || !closeSky(sky, iblSky_)) {
         recordIblUpdate(cmd, frame);
         iblSky_ = sky;
         iblValid_ = true;
         stats_.iblUpdated = true;
+        ++iblUpdateCount_;
     }
     profiler_.end(cmd, frameIndex_, GpuScope::Ibl);
 

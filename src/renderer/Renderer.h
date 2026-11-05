@@ -116,6 +116,7 @@ public:
 
     const GpuProfiler& profiler() const { return profiler_; }
     const FrameStats& stats() const { return stats_; }
+    uint64_t iblUpdateCount() const { return iblUpdateCount_; }  // since start
     const Swapchain& swapchain() const { return swapchain_; }
 
 private:
@@ -266,6 +267,7 @@ private:
     VkPipeline iblIrradiancePipeline_ = VK_NULL_HANDLE;
     SkyState iblSky_;        // the sky the cube maps were made from
     bool iblValid_ = false;  // false until the first update
+    uint64_t iblUpdateCount_ = 0;
 
     std::vector<RenderObject> objects_;
     Buffer identityInstance_;  // one default InstanceData, shared by every non-instanced object

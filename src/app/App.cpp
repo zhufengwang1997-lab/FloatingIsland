@@ -156,10 +156,12 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath, Benchmark* 
     }
     const GpuProfiler& gpu = renderer_.profiler();
     if (maxFrames > 0 && gpu.supported() && !benchmark) {
-        std::printf("GPU ms (smoothed): frame %.3f | shadow %.3f | main %.3f | composite %.3f | ui %.3f\n",
-                    gpu.milliseconds(GpuScope::Frame), gpu.milliseconds(GpuScope::Shadow),
+        std::printf("GPU ms (smoothed): frame %.3f | ibl %.3f | shadow %.3f | main %.3f | composite %.3f | ui %.3f\n",
+                    gpu.milliseconds(GpuScope::Frame), gpu.milliseconds(GpuScope::Ibl), gpu.milliseconds(GpuScope::Shadow),
                     gpu.milliseconds(GpuScope::Main), gpu.milliseconds(GpuScope::Composite),
                     gpu.milliseconds(GpuScope::Ui));
+        std::printf("IBL cube maps remade in %llu of %d frames\n",
+                    static_cast<unsigned long long>(renderer_.iblUpdateCount()), totalFrames);
         std::printf("GPU scene (shadow + main): %.3f ms\n",
                     gpu.milliseconds(GpuScope::Shadow) + gpu.milliseconds(GpuScope::Main));
     }

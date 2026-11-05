@@ -86,6 +86,7 @@ public:
     uint32_t objectTriangles(uint32_t i) const { return objects_[i].mesh.indexCount / 3 * objects_[i].instanceCount; }
     bool& objectVisible(uint32_t i) { return objects_[i].visible; }
     bool& objectCastsShadow(uint32_t i) { return objects_[i].castsShadow; }
+    uint32_t objectChunks(uint32_t i) const { return static_cast<uint32_t>(objects_[i].chunks.size()); }
 
     const GpuProfiler& profiler() const { return profiler_; }
     const FrameStats& stats() const { return stats_; }

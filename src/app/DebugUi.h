@@ -10,7 +10,7 @@ class VulkanContext;
 struct GLFWwindow;
 
 // Dear ImGui overlay: frame timings (CPU and per-pass GPU), scene stats and live render settings.
-// Toggle with F1.
+// Toggle with F1 or H.
 class DebugUi {
 public:
     // Call after the app has installed its own GLFW callbacks: ImGui chains to them.

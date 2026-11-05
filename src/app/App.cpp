@@ -49,7 +49,8 @@ void App::init(bool vsync, const AppOptions& options) {
     glfwSetKeyCallback(window_, [](GLFWwindow* w, int key, int, int action, int) {
         if (action != GLFW_PRESS) return;
         if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(w, GLFW_TRUE);
-        if (key == GLFW_KEY_F1) {
+        // F1, or H: on Mac keyboards F1 is a media key (brightness) unless fn is held.
+        if (key == GLFW_KEY_F1 || key == GLFW_KEY_H) {
             DebugUi& ui = static_cast<App*>(glfwGetWindowUserPointer(w))->ui_;
             ui.visible = !ui.visible;
         }

@@ -80,7 +80,7 @@ void DebugUi::build(Renderer& renderer, const Camera& camera, float cpuFrameMs) 
     if (visible) {
         ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize({360, 0}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("FloatingIsland (F1)");
+        ImGui::Begin("FloatingIsland (F1 / H)");
         drawStats(renderer, camera);
         drawSettings(renderer);
         ImGui::End();

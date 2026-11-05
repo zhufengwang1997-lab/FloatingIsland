@@ -43,20 +43,50 @@ float ValueNoise(float2 p)
     return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
-// Cloud density, about 0..1. Octaves drift at different speeds, so the clouds change shape as
-// they move instead of sliding by as one rigid picture.
-float Density(float2 p, float time)
+// Cloud density is fractal noise: 5 octaves of value noise, each twice as fine and half as strong.
+// Octaves drift at different speeds, so the clouds change shape as they move instead of sliding by
+// as one rigid picture. Split in two so the shading can reuse the broad shape:
+//   CloudShape:  octaves 1-3, the large billows (sum of amplitudes 0.875)
+//   CloudDetail: octaves 4-5, small wisps. Only computed close up: octave 4 fades out towards
+//                600 m, octave 5 towards 300 m. A faded octave counts as its average value (0.5),
+//                so the density keeps the same mean and there is no ring where an octave stops.
+static const float kOctaveNorm = 0.96875;  // 0.5 + 0.25 + ... + 1/32
+
+float2 OctaveOffset(int i, float time)
 {
-    float sum = 0.0, amplitude = 0.5, norm = 0.0;
+    return time * float2(0.010, 0.004) * (1.0 + i * 0.6);
+}
+
+float CloudShape(float2 p, float time)
+{
+    float sum = 0.0, amplitude = 0.5;
     float2 q = p / 70.0;
-    [unroll] for (int i = 0; i < 5; ++i)
+    [unroll] for (int i = 0; i < 3; ++i)
     {
-        sum += amplitude * ValueNoise(q + time * float2(0.010, 0.004) * (1.0 + i * 0.6));
-        norm += amplitude;
+        sum += amplitude * ValueNoise(q + OctaveOffset(i, time));
         amplitude *= 0.5;
         q = q * 2.03 + float2(17.1, 9.3);
     }
-    return sum / norm;
+    return sum;
+}
+
+float CloudDetail(float2 p, float time, float dist)
+{
+    float sum = 0.0, amplitude = 0.0625;
+    float2 q = p / 70.0;
+    [unroll] for (int k = 0; k < 3; ++k) q = q * 2.03 + float2(17.1, 9.3);  // the 4th octave's scale
+    [unroll] for (int i = 3; i < 5; ++i)
+    {
+        float reach = 600.0 * exp2(3.0 - i);
+        float weight = saturate((reach - dist) / (0.3 * reach));
+        float n = 0.5;
+        [branch] if (weight > 0.0)
+            n = lerp(0.5, ValueNoise(q + OctaveOffset(i, time)), weight);
+        sum += amplitude * n;
+        amplitude *= 0.5;
+        q = q * 2.03 + float2(17.1, 9.3);
+    }
+    return sum;
 }
 
 // ---- Shading ---------------------------------------------------------------
@@ -68,13 +98,15 @@ float4 PSMain(VSOutput input) : SV_Target0
     float dist = length(toCamera);
     float3 viewDir = -toCamera / dist;
 
-    float density = Density(input.worldPos.xz, time);
+    float shape = CloudShape(input.worldPos.xz, time);
+    float density = (shape + CloudDetail(input.worldPos.xz, time, dist)) / kOctaveNorm;
     float coverage = smoothstep(0.36, 0.60, density);
 
     // Cheap self-shadowing: compare with the density a little towards the sun. Where the cloud
     // gets thicker towards the sun, this point is in the shade of that thicker part.
     float2 towardSun = normalize(frame.sunDirection.xz + 1e-4) * 6.0;
-    float shade = saturate((Density(input.worldPos.xz + towardSun, time) - density) * 6.0);
+    // The broad shape is enough for this (one more CloudShape sample, the detail is left out).
+    float shade = saturate((CloudShape(input.worldPos.xz + towardSun, time) - shape) / kOctaveNorm * 6.0);
 
     float3 L = normalize(frame.sunDirection.xyz);
     float sunAmount = saturate(L.y) * (1.0 - 0.6 * shade);

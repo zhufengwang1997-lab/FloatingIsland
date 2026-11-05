@@ -14,6 +14,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -75,7 +76,15 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
     createPresentSemaphores();
     createDescriptors();
     writeHdrDescriptors();
+    // Pipelines compile their shaders for this GPU; the cache from the last run lets them skip that.
+    pipelineCache_.init(ctx.device, ctx.physicalDevice, FI_SHADER_DIR "/../pipeline_cache.bin");
+    const auto pipelinesStart = std::chrono::steady_clock::now();
     createPipelines();
+    const double pipelineMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pipelinesStart).count();
+    std::printf("Pipelines: created in %.1f ms (%s)\n", pipelineMs,
+                pipelineCache_.loadedBytes() > 0 ? "from the pipeline cache" : "no pipeline cache yet");
+    pipelineCache_.save();
     profiler_.init(ctx);
     const InstanceData identity{};
     identityInstance_ = uploadBuffer(ctx, &identity, sizeof(identity), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -93,6 +102,7 @@ void Renderer::shutdown() {
     objects_.clear();
     destroyBuffer(ctx_->allocator, identityInstance_);
     destroyBuffer(ctx_->allocator, captureBuffer_);
+    pipelineCache_.destroy();
     vkDestroyPipeline(device, meshPipeline_, nullptr);
     vkDestroyPipeline(device, foliagePipeline_, nullptr);
     vkDestroyPipeline(device, compositePipeline_, nullptr);
@@ -425,8 +435,8 @@ void Renderer::createPipelines() {
         .colorFormat(kHdrFormat)
         .depthFormat(kDepthFormat)
         .layout(pipelineLayout_);
-    meshPipeline_ = mesh.build(device);
-    foliagePipeline_ = mesh.cull(VK_CULL_MODE_NONE).build(device);
+    meshPipeline_ = mesh.build(device, pipelineCache_.handle());
+    foliagePipeline_ = mesh.cull(VK_CULL_MODE_NONE).build(device, pipelineCache_.handle());
     vkDestroyShaderModule(device, meshVs, nullptr);
     vkDestroyShaderModule(device, meshPs, nullptr);
 
@@ -444,7 +454,7 @@ void Renderer::createPipelines() {
                           .dynamicState(VK_DYNAMIC_STATE_DEPTH_BIAS)
                           .depthFormat(kDepthFormat)
                           .layout(pipelineLayout_)
-                          .build(device);
+                          .build(device, pipelineCache_.handle());
     vkDestroyShaderModule(device, shadowVs, nullptr);
 
     // Composite: fullscreen triangle generated from the vertex index, no depth, no culling.
@@ -457,7 +467,7 @@ void Renderer::createPipelines() {
                              .depth(false, false)
                              .colorFormat(swapchain_.format)
                              .layout(pipelineLayout_)
-                             .build(device);
+                             .build(device, pipelineCache_.handle());
     vkDestroyShaderModule(device, compositeVs, nullptr);
     vkDestroyShaderModule(device, compositePs, nullptr);
 }

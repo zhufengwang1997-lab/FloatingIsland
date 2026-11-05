@@ -78,7 +78,7 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::layout(VkPipelineLayout layout
     return *this;
 }
 
-VkPipeline GraphicsPipelineBuilder::build(VkDevice device) const {
+VkPipeline GraphicsPipelineBuilder::build(VkDevice device, VkPipelineCache cache) const {
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertexInput.vertexBindingDescriptionCount = static_cast<uint32_t>(bindings_.size());
     vertexInput.pVertexBindingDescriptions = bindings_.data();
@@ -142,6 +142,6 @@ VkPipeline GraphicsPipelineBuilder::build(VkDevice device) const {
     info.layout = layout_;
 
     VkPipeline pipeline;
-    VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline));
+    VK_CHECK(vkCreateGraphicsPipelines(device, cache, 1, &info, nullptr, &pipeline));
     return pipeline;
 }

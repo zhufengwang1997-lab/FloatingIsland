@@ -108,6 +108,7 @@ add_executable(FloatingIsland
   src/rhi/Swapchain.cpp
   src/rhi/Resources.cpp
   src/rhi/Pipeline.cpp
+  src/rhi/PipelineCache.cpp
   src/rhi/VmaImpl.cpp
   src/renderer/Renderer.cpp
   src/renderer/GpuProfiler.cpp

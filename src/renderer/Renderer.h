@@ -2,6 +2,7 @@
 
 #include "renderer/GpuProfiler.h"
 #include "rhi/Resources.h"
+#include "rhi/PipelineCache.h"
 #include "rhi/Swapchain.h"
 #include "scene/Culling.h"
 
@@ -215,6 +216,7 @@ private:
     VkPipeline foliagePipeline_ = VK_NULL_HANDLE;  // mesh shading without back-face culling
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
+    PipelineCache pipelineCache_;  // build/pipeline_cache.bin
 
     std::vector<RenderObject> objects_;
     Buffer identityInstance_;  // one default InstanceData, shared by every non-instanced object

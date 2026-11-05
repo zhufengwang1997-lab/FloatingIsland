@@ -25,7 +25,8 @@ public:
     GraphicsPipelineBuilder& depthFormat(VkFormat format);
     GraphicsPipelineBuilder& layout(VkPipelineLayout layout);
 
-    VkPipeline build(VkDevice device) const;
+    // cache: optional; pipelines found in it are not compiled again.
+    VkPipeline build(VkDevice device, VkPipelineCache cache = VK_NULL_HANDLE) const;
 
 private:
     std::vector<VkPipelineShaderStageCreateInfo> stages_;

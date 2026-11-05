@@ -68,11 +68,12 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
     ctx_ = &ctx;
     window_ = window;
     swapchain_.create(ctx, framebufferExtent(window), vsync_);
-    createDepthImage();
+    createRenderTargets();
     createShadowResources();
     createFrameResources();
     createPresentSemaphores();
     createDescriptors();
+    writeHdrDescriptors();
     createPipelines();
     profiler_.init(ctx);
     const InstanceData identity{};
@@ -93,6 +94,7 @@ void Renderer::shutdown() {
     destroyBuffer(ctx_->allocator, captureBuffer_);
     vkDestroyPipeline(device, meshPipeline_, nullptr);
     vkDestroyPipeline(device, foliagePipeline_, nullptr);
+    vkDestroyPipeline(device, compositePipeline_, nullptr);
     vkDestroyPipeline(device, shadowPipeline_, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
     vkDestroyDescriptorPool(device, descriptorPool_, nullptr);  // also frees the sets
@@ -107,7 +109,7 @@ void Renderer::shutdown() {
     }
     vkDestroySampler(device, shadowSampler_, nullptr);
     destroyImage(*ctx_, shadowMap_);
-    destroyImage(*ctx_, depth_);
+    destroyRenderTargets();
     swapchain_.destroy(device);
 }
 
@@ -182,9 +184,29 @@ void Renderer::destroyPresentSemaphores() {
     renderFinished_.clear();
 }
 
-void Renderer::createDepthImage() {
+void Renderer::createRenderTargets() {
     depth_ = createImage(*ctx_, swapchain_.extent, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                          VK_IMAGE_ASPECT_DEPTH_BIT);
+    hdr_ = createImage(*ctx_, swapchain_.extent, kHdrFormat,
+                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+}
+
+void Renderer::destroyRenderTargets() {
+    destroyImage(*ctx_, hdr_);
+    destroyImage(*ctx_, depth_);
+}
+
+void Renderer::writeHdrDescriptors() {
+    VkDescriptorImageInfo imageInfo{VK_NULL_HANDLE, hdr_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    for (FrameData& f : frames_) {
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = f.descriptorSet;
+        write.dstBinding = 2;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        write.pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(ctx_->device, 1, &write, 0, nullptr);
+    }
 }
 
 void Renderer::createShadowResources() {
@@ -210,9 +232,10 @@ void Renderer::createShadowResources() {
 void Renderer::createDescriptors() {
     VkDevice device = ctx_->device;
 
-    // Set 0: binding 0 = FrameUniforms, binding 1 = shadow map + comparison sampler.
-    // The sampler is immutable (baked into the layout); MoltenVK prefers comparison samplers that way.
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    // Set 0: binding 0 = FrameUniforms, binding 1 = shadow map + comparison sampler,
+    // binding 2 = HDR scene image (read by the composite pass with Load, so no sampler).
+    // The comparison sampler is immutable (baked into the layout); MoltenVK prefers it that way.
+    VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -222,18 +245,23 @@ void Renderer::createDescriptors() {
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[1].pImmutableSamplers = &shadowSampler_;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 2;
+    layoutInfo.bindingCount = 3;
     layoutInfo.pBindings = bindings;
     VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &setLayout_));
 
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kFramesInFlight},
     };
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = kFramesInFlight;
-    poolInfo.poolSizeCount = 2;
+    poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = sizes;
     VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool_));
 
@@ -300,7 +328,7 @@ void Renderer::createPipelines() {
                          instancePosition,
                          instanceParams,
                      })
-        .colorFormat(swapchain_.format)
+        .colorFormat(kHdrFormat)
         .depthFormat(kDepthFormat)
         .layout(pipelineLayout_);
     meshPipeline_ = mesh.build(device);
@@ -324,6 +352,20 @@ void Renderer::createPipelines() {
                           .layout(pipelineLayout_)
                           .build(device);
     vkDestroyShaderModule(device, shadowVs, nullptr);
+
+    // Composite: fullscreen triangle generated from the vertex index, no depth, no culling.
+    VkShaderModule compositeVs = loadShaderModule(device, FI_SHADER_DIR "/composite.vs.spv");
+    VkShaderModule compositePs = loadShaderModule(device, FI_SHADER_DIR "/composite.ps.spv");
+    compositePipeline_ = GraphicsPipelineBuilder()
+                             .stage(VK_SHADER_STAGE_VERTEX_BIT, compositeVs, "VSMain")
+                             .stage(VK_SHADER_STAGE_FRAGMENT_BIT, compositePs, "PSMain")
+                             .cull(VK_CULL_MODE_NONE)
+                             .depth(false, false)
+                             .colorFormat(swapchain_.format)
+                             .layout(pipelineLayout_)
+                             .build(device);
+    vkDestroyShaderModule(device, compositeVs, nullptr);
+    vkDestroyShaderModule(device, compositePs, nullptr);
 }
 
 void Renderer::recreateSwapchain() {
@@ -338,10 +380,11 @@ void Renderer::recreateSwapchain() {
     vkDeviceWaitIdle(ctx_->device);
     const VkFormat oldFormat = swapchain_.format;
     destroyPresentSemaphores();
-    destroyImage(*ctx_, depth_);
+    destroyRenderTargets();
     swapchain_.destroy(ctx_->device);
     swapchain_.create(*ctx_, size, vsync_);
-    createDepthImage();
+    createRenderTargets();
+    writeHdrDescriptors();
     createPresentSemaphores();
     if (swapchain_.format != oldFormat) {
         throw std::runtime_error("Swapchain format changed; pipeline would need rebuilding");
@@ -394,6 +437,7 @@ void Renderer::drawFrame(const Camera& camera) {
     FrameUniforms uniforms{};
     uniforms.viewProj = camera.projection(aspect) * camera.view();
     uniforms.lightViewProj = lightViewProj();
+    uniforms.invViewProj = glm::inverse(uniforms.viewProj);
     uniforms.cameraPosition = glm::vec4(camera.position, 1.0f);
     uniforms.sunDirection = glm::vec4(glm::normalize(sunDirection), 0.0f);
     uniforms.sunColor = glm::vec4(sunColor, 0.0f);
@@ -418,8 +462,12 @@ void Renderer::drawFrame(const Camera& camera) {
     profiler_.end(cmd, frameIndex_, GpuScope::Shadow);
 
     profiler_.begin(cmd, frameIndex_, GpuScope::Main);
-    recordMainPass(cmd, imageIndex, frame.descriptorSet);
+    recordMainPass(cmd, frame.descriptorSet);
     profiler_.end(cmd, frameIndex_, GpuScope::Main);
+
+    profiler_.begin(cmd, frameIndex_, GpuScope::Composite);
+    recordCompositePass(cmd, imageIndex, frame.descriptorSet);
+    profiler_.end(cmd, frameIndex_, GpuScope::Composite);
 
     profiler_.begin(cmd, frameIndex_, GpuScope::Ui);
     recordUiPass(cmd, imageIndex);
@@ -537,51 +585,84 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set) {
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 }
 
-void Renderer::recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set) {
-    VkImage image = swapchain_.images[imageIndex];
-    // Previous contents don't matter (we clear), so transition from UNDEFINED.
-    transitionImage(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+void Renderer::recordMainPass(VkCommandBuffer cmd, VkDescriptorSet set) {
+    // The HDR image is shared by all frames: the previous frame's composite pass may still be reading
+    // it. Previous contents don't matter (we clear), so transition from UNDEFINED.
+    transitionImage(cmd, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    // The depth image is shared by all frames: wait for the previous frame's depth writes first.
+    // Likewise the depth image: wait for the previous frame's depth writes first.
     transitionImage(cmd, depth_.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, kDepthStages,
                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, kDepthStages, kDepthReadWrite);
 
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = swapchain_.views[imageIndex];
+    color.imageView = hdr_.view;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color = {{0.30f, 0.52f, 0.85f, 1.0f}};  // sky blue (linear)
+    color.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};  // alpha 0 = sky, filled in by the composite pass
 
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     depth.imageView = depth_.view;
     depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;  // not needed after this frame
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;  // not needed after this pass
     depth.clearValue.depthStencil = {1.0f, 0};
 
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea = {{0, 0}, swapchain_.extent};
+    rendering.renderArea = {{0, 0}, hdr_.extent};
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
     rendering.pDepthAttachment = &depth;
     vkCmdBeginRendering(cmd, &rendering);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
-    setViewportAndScissor(cmd, swapchain_.extent);
+    setViewportAndScissor(cmd, hdr_.extent);
     drawObjects(cmd, false);  // binds the mesh / foliage pipeline per object
+    vkCmdEndRendering(cmd);
+
+    // Color writes must finish before the composite pass reads the image.
+    transitionImage(cmd, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+}
+
+// HDR image -> swapchain image. The first command that writes the swapchain image.
+void Renderer::recordCompositePass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set) {
+    // Every pixel is overwritten, so the old contents don't matter.
+    transitionImage(cmd, swapchain_.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = swapchain_.views[imageIndex];
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea = {{0, 0}, swapchain_.extent};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
+    setViewportAndScissor(cmd, swapchain_.extent);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
 }
 
-// Draws ImGui on top of the main pass. The image stays in COLOR_ATTACHMENT_OPTIMAL.
+// Draws ImGui on top of the composited image. The image stays in COLOR_ATTACHMENT_OPTIMAL.
 void Renderer::recordUiPass(VkCommandBuffer cmd, uint32_t imageIndex) {
     ImDrawData* drawData = ImGui::GetCurrentContext() ? ImGui::GetDrawData() : nullptr;
     if (!drawData) return;
 
-    // Separate rendering scope, so the main pass's color writes must finish first (write after write).
+    // Separate rendering scope, so the composite pass's color writes must finish first (write after write).
     transitionImage(cmd, swapchain_.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,

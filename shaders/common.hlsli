@@ -7,6 +7,7 @@ struct FrameData
 {
     float4x4 viewProj;
     float4x4 lightViewProj;   // world -> shadow map clip space
+    float4x4 invViewProj;     // clip -> world, for reconstructing view rays
     float4 cameraPosition;    // xyz
     float4 sunDirection;      // xyz: unit vector towards the sun
     float4 sunColor;          // rgb: color * intensity
@@ -21,6 +22,20 @@ struct ObjectData
     float4x4 model;
 };
 [[vk::push_constant]] ObjectData object;
+
+// Sky radiance seen along a direction (HDR, before exposure): a horizon-to-zenith gradient, a
+// lighter haze below the horizon (the island floats, so we can look down) and the sun disk.
+float3 SkyRadiance(float3 dir)
+{
+    float3 zenith = float3(0.10, 0.24, 0.68);
+    float3 horizon = float3(0.38, 0.55, 0.80);
+    float3 below = float3(0.24, 0.38, 0.62);
+    float3 sky = dir.y >= 0.0 ? lerp(horizon, zenith, sqrt(saturate(dir.y)))
+                              : lerp(horizon, below, sqrt(saturate(-dir.y)));
+    float sunCos = saturate(dot(dir, frame.sunDirection.xyz));
+    sky += frame.sunColor.rgb * (pow(sunCos, 3000.0) * 8.0 + pow(sunCos, 24.0) * 0.08);
+    return sky;
+}
 
 // Per-instance data (vertex binding 1). Matches InstanceData in src/scene/Mesh.h.
 // Objects drawn once use a single identity instance.

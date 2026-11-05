@@ -102,9 +102,13 @@ void DebugUi::drawStats(const Renderer& renderer, const Camera& camera) {
     const float cpuMs = cpuHistory_[(historyOffset_ + kHistory - 1) % kHistory];
     ImGui::Text("CPU frame   %6.2f ms  (%.0f fps)", cpuMs, cpuMs > 0.0f ? 1000.0f / cpuMs : 0.0f);
     if (gpu.supported()) {
-        for (GpuScope s : {GpuScope::Frame, GpuScope::Shadow, GpuScope::Main, GpuScope::Ui}) {
+        for (GpuScope s : {GpuScope::Frame, GpuScope::Shadow, GpuScope::Main, GpuScope::Composite, GpuScope::Ui}) {
             ImGui::Text("GPU %-12s%6.3f ms", gpuScopeName(s), gpu.milliseconds(s));
         }
+        // The composite pass can include waiting for the display to release the swapchain image,
+        // so shadow + main is the number to compare between optimizations.
+        ImGui::Text("GPU scene      %6.3f ms  (shadow + main)",
+                    gpu.milliseconds(GpuScope::Shadow) + gpu.milliseconds(GpuScope::Main));
     } else {
         ImGui::TextDisabled("GPU timestamps not supported on this queue");
     }

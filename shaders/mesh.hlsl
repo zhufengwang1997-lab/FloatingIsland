@@ -1,5 +1,6 @@
 // Physically based shading (metallic-roughness, GGX) for one directional sun light,
-// with a PCF shadow map, hemisphere ambient and ACES tonemapping.
+// with a PCF shadow map and hemisphere ambient. Writes linear HDR radiance; exposure and
+// tonemapping happen later in composite.hlsl.
 #include "common.hlsli"
 
 [[vk::combinedImageSampler]][[vk::binding(1, 0)]] Texture2D<float> shadowMap;
@@ -79,14 +80,6 @@ float SunShadow(float3 worldPos)
     return sum / 9.0;
 }
 
-// ---- Tonemapping -------------------------------------------------------------
-
-// Narkowicz's fit of the ACES filmic curve: HDR radiance -> [0, 1].
-float3 ACESFilm(float3 x)
-{
-    return saturate((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
-}
-
 float3 Hemisphere(float3 dir)
 {
     float3 sky = float3(0.35, 0.50, 0.75);
@@ -126,6 +119,6 @@ float4 PSMain(VSOutput input) : SV_Target0
     float3 ambient = Hemisphere(N) * diffuseColor * 0.6
                    + Hemisphere(R) * f0 * (1.0 - roughness * 0.7) * 0.6;
 
-    float3 color = (direct + ambient) * frame.params.x;
-    return float4(ACESFilm(color), 1.0);   // the sRGB swapchain applies gamma
+    // Alpha 1 marks geometry; the composite pass draws the sky where alpha is still 0.
+    return float4(direct + ambient, 1.0);
 }

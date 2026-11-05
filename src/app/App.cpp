@@ -122,9 +122,12 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
     }
     const GpuProfiler& gpu = renderer_.profiler();
     if (maxFrames > 0 && gpu.supported()) {
-        std::printf("GPU ms (smoothed): frame %.3f | shadow %.3f | main %.3f | ui %.3f\n",
+        std::printf("GPU ms (smoothed): frame %.3f | shadow %.3f | main %.3f | composite %.3f | ui %.3f\n",
                     gpu.milliseconds(GpuScope::Frame), gpu.milliseconds(GpuScope::Shadow),
-                    gpu.milliseconds(GpuScope::Main), gpu.milliseconds(GpuScope::Ui));
+                    gpu.milliseconds(GpuScope::Main), gpu.milliseconds(GpuScope::Composite),
+                    gpu.milliseconds(GpuScope::Ui));
+        std::printf("GPU scene (shadow + main): %.3f ms\n",
+                    gpu.milliseconds(GpuScope::Shadow) + gpu.milliseconds(GpuScope::Main));
     }
 }
 

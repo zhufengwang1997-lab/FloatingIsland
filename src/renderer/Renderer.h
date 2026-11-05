@@ -29,10 +29,13 @@ struct FrameStats {
     uint64_t triangles = 0;
 };
 
-// Draws the scene in three passes per frame:
-//   1. shadow pass: scene depth from the sun into a shadow map
-//   2. main pass:   PBR shading into the swapchain image, sampling the shadow map
-//   3. UI pass:     Dear ImGui draw data on top (if ImGui::Render() was called this frame)
+// Draws the scene in four passes per frame:
+//   1. shadow pass:    scene depth from the sun into a shadow map
+//   2. main pass:      PBR shading into an offscreen HDR image, sampling the shadow map
+//   3. composite pass: sky + exposure + tonemapping, HDR image -> swapchain image
+//   4. UI pass:        Dear ImGui draw data on top (if ImGui::Render() was called this frame)
+// Only passes 3 and 4 touch the swapchain image, so waiting for the display to release it (which
+// on Metal happens on the GPU) can't stall or skew the timing of the scene passes.
 // Up to kFramesInFlight frames are queued on the GPU at once.
 class Renderer {
 public:
@@ -76,12 +79,14 @@ public:
 private:
     static constexpr uint32_t kFramesInFlight = 2;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+    static constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr uint32_t kShadowMapSize = 2048;
 
     // Matches FrameData in shaders/common.hlsli.
     struct FrameUniforms {
         glm::mat4 viewProj;
         glm::mat4 lightViewProj;
+        glm::mat4 invViewProj;
         glm::vec4 cameraPosition;
         glm::vec4 sunDirection;
         glm::vec4 sunColor;
@@ -112,7 +117,9 @@ private:
     void createFrameResources();
     void createPresentSemaphores();
     void destroyPresentSemaphores();
-    void createDepthImage();
+    void createRenderTargets();   // depth + HDR, sized like the swapchain
+    void destroyRenderTargets();
+    void writeHdrDescriptors();   // binding 2 of every frame's set; after the HDR image changes
     void createShadowResources();
     void createDescriptors();
     void createPipelines();
@@ -121,7 +128,8 @@ private:
     // shadowPass: the caller has bound the shadow pipeline; otherwise pick mesh / foliage per object.
     void drawObjects(VkCommandBuffer cmd, bool shadowPass);
     void recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set);
-    void recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set);
+    void recordMainPass(VkCommandBuffer cmd, VkDescriptorSet set);
+    void recordCompositePass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set);
     void recordUiPass(VkCommandBuffer cmd, uint32_t imageIndex);
     void recordCapture(VkCommandBuffer cmd, VkImage image);
     void writeCapture(const std::string& path);
@@ -130,6 +138,7 @@ private:
     GLFWwindow* window_ = nullptr;
     Swapchain swapchain_;
     Image depth_;      // one is enough: frames on the same queue are ordered by the depth barrier
+    Image hdr_;        // linear scene radiance; alpha = 1 where geometry was drawn
     Image shadowMap_;  // likewise shared by all frames
     VkSampler shadowSampler_ = VK_NULL_HANDLE;
 
@@ -144,6 +153,7 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;  // shared by both pipelines
     VkPipeline meshPipeline_ = VK_NULL_HANDLE;
     VkPipeline foliagePipeline_ = VK_NULL_HANDLE;  // mesh shading without back-face culling
+    VkPipeline compositePipeline_ = VK_NULL_HANDLE;
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
 
     std::vector<RenderObject> objects_;

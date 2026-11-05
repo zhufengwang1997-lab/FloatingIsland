@@ -1,0 +1,21 @@
+# Build output
+build/
+out/
+cmake-build-*/
+
+# Compiled shaders (generated from shaders/*.hlsl at build time)
+*.spv
+
+# IDE / OS
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+.DS_Store
+
+# Captures and profiling data (large; keep out of git)
+*.rdc
+*.gputrace/
+*.nsight-gfxproj
+*.ngfx-capture

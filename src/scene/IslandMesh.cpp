@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -88,60 +91,85 @@ void addLayer(MeshData& mesh, const IslandParams& p, bool top) {
     const float step = 2.0f * extent / static_cast<float>(n);
     auto gridX = [&](int i) { return -extent + static_cast<float>(i) * step; };
 
-    // Which grid points are land.
+    // Distance to the coastline at each grid point: < 1 is land.
     std::vector<float> rn(static_cast<size_t>(side * side));
     for (int j = 0; j < side; ++j)
         for (int i = 0; i < side; ++i) rn[j * side + i] = coastDistance(gridX(i), gridX(j), p);
-    auto inside = [&](int i, int j) {
-        return i >= 0 && j >= 0 && i < side && j < side && rn[j * side + i] < 1.0f;
-    };
 
-    std::vector<int32_t> index(static_cast<size_t>(side * side), -1);
-    for (int j = 0; j < side; ++j) {
-        for (int i = 0; i < side; ++i) {
-            if (!inside(i, j)) continue;
-            const float x = gridX(i), z = gridX(j), r = rn[j * side + i];
-            // Coast vertices sit at y = 0 in both layers so the top and the underside meet exactly.
-            // All 8 neighbours count: a cell with an outside corner loses both triangles, and its
-            // diagonal corner then lies on the mesh border too.
-            bool coast = false;
-            for (int dj = -1; dj <= 1; ++dj)
-                for (int di = -1; di <= 1; ++di) coast = coast || !inside(i + di, j + dj);
-            Vertex v{};
-            if (top) {
-                const float h = coast ? 0.0f : topHeight(x, z, r, p);
-                v.position = {x, h, z};
-                v.color = topColor(h, coast ? 1.0f : r, p);
-                // Grass and sand are very rough; exposed rock on the peaks a little less so.
-                v.material = {glm::mix(0.9f, 0.65f, glm::smoothstep(0.65f, 0.85f, h / p.maxHeight)), 0.0f};
-            } else {
-                const float d = coast ? 0.0f : bottomDepth(x, z, r, p);
-                v.position = {x, -d, z};
-                v.color = bottomColor(d, p);
-                v.material = {0.85f, 0.0f};
-            }
-            index[j * side + i] = static_cast<int32_t>(mesh.vertices.size());
-            mesh.vertices.push_back(v);
+    // A vertex of this layer at a point on the island. At the coastline (r = 1) both layers have
+    // y = 0: the hills flatten out and the underside thins to nothing there, so they meet exactly.
+    auto makeVertex = [&](float x, float z, float r) {
+        Vertex v{};
+        if (top) {
+            const float h = r >= 1.0f ? 0.0f : topHeight(x, z, r, p);
+            v.position = {x, h, z};
+            v.color = topColor(h, std::min(r, 1.0f), p);
+            // Grass and sand are very rough; exposed rock on the peaks a little less so.
+            v.material = {glm::mix(0.9f, 0.65f, glm::smoothstep(0.65f, 0.85f, h / p.maxHeight)), 0.0f};
+        } else {
+            const float d = r >= 1.0f ? 0.0f : bottomDepth(x, z, r, p);
+            v.position = {x, -d, z};
+            v.color = bottomColor(d, p);
+            v.material = {0.85f, 0.0f};
         }
-    }
-
-    // Two triangles per grid cell, kept only when all three corners are land.
-    // Top faces wind counter-clockwise seen from above (+Y), the underside the other way.
-    auto tri = [&](int32_t a, int32_t b, int32_t c) {
-        if (a < 0 || b < 0 || c < 0) return;
-        mesh.indices.insert(mesh.indices.end(),
-                            {static_cast<uint32_t>(a), static_cast<uint32_t>(b), static_cast<uint32_t>(c)});
+        mesh.vertices.push_back(v);
+        return static_cast<uint32_t>(mesh.vertices.size() - 1);
     };
+
+    // Land grid points, created on first use.
+    std::vector<int64_t> gridIndex(static_cast<size_t>(side * side), -1);
+    auto gridVertex = [&](int g) {
+        if (gridIndex[g] < 0) gridIndex[g] = makeVertex(gridX(g % side), gridX(g / side), rn[g]);
+        return static_cast<uint32_t>(gridIndex[g]);
+    };
+    // Points where a grid edge crosses the coastline, shared by the two triangles on that edge.
+    std::unordered_map<uint64_t, uint32_t> crossings;
+    auto coastVertex = [&](int inner, int outer) {
+        const uint64_t key = static_cast<uint64_t>(std::min(inner, outer)) << 32 | static_cast<uint32_t>(std::max(inner, outer));
+        if (auto it = crossings.find(key); it != crossings.end()) return it->second;
+        // Start from the linear estimate along the edge, then bisect on the real coastline so the
+        // point lies on it (r = 1) rather than on the grid's linear approximation of it.
+        const glm::vec2 a{gridX(inner % side), gridX(inner / side)};
+        const glm::vec2 b{gridX(outer % side), gridX(outer / side)};
+        float lo = 0.0f, hi = 1.0f;  // r(lo) < 1 <= r(hi)
+        for (int k = 0; k < 12; ++k) {
+            const float mid = 0.5f * (lo + hi);
+            const glm::vec2 q = glm::mix(a, b, mid);
+            (coastDistance(q.x, q.y, p) < 1.0f ? lo : hi) = mid;
+        }
+        const glm::vec2 q = glm::mix(a, b, 0.5f * (lo + hi));
+        const uint32_t v = makeVertex(q.x, q.y, 1.0f);
+        crossings.emplace(key, v);
+        return v;
+    };
+
+    // Each triangle of the grid, clipped to the land: the corners on land are kept, and where an
+    // edge leaves the land a new vertex goes exactly on the coastline. What is left is a triangle
+    // or a quad (a fan of two triangles). Clipping keeps the winding order.
+    auto clippedTriangle = [&](int g0, int g1, int g2) {
+        const int g[3] = {g0, g1, g2};
+        uint32_t polygon[4];
+        int count = 0;
+        for (int e = 0; e < 3; ++e) {
+            const int from = g[e], to = g[(e + 1) % 3];
+            const bool fromIn = rn[from] < 1.0f, toIn = rn[to] < 1.0f;
+            if (fromIn) polygon[count++] = gridVertex(from);
+            if (fromIn != toIn) polygon[count++] = fromIn ? coastVertex(from, to) : coastVertex(to, from);
+        }
+        for (int k = 1; k + 1 < count; ++k) mesh.indices.insert(mesh.indices.end(), {polygon[0], polygon[k], polygon[k + 1]});
+    };
+
+    // Two triangles per grid cell. Top faces wind counter-clockwise seen from above (+Y), the
+    // underside the other way.
     for (int j = 0; j < n; ++j) {
         for (int i = 0; i < n; ++i) {
-            const int32_t a = index[j * side + i], b = index[j * side + i + 1];
-            const int32_t c = index[(j + 1) * side + i], d = index[(j + 1) * side + i + 1];
+            const int a = j * side + i, b = a + 1, c = a + side, d = c + 1;
             if (top) {
-                tri(a, c, b);
-                tri(b, c, d);
+                clippedTriangle(a, c, b);
+                clippedTriangle(b, c, d);
             } else {
-                tri(a, b, c);
-                tri(b, d, c);
+                clippedTriangle(a, b, c);
+                clippedTriangle(b, d, c);
             }
         }
     }

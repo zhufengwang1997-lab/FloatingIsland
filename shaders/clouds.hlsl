@@ -3,6 +3,9 @@
 // writing linear HDR radiance like mesh.hlsl.
 #include "common.hlsli"
 
+[[vk::combinedImageSampler]][[vk::binding(4, 0)]] TextureCube<float4> irradianceMap;  // see mesh.hlsl
+[[vk::combinedImageSampler]][[vk::binding(4, 0)]] SamplerState irradianceSampler;
+
 static const float kCloudHeight = -45.0;   // below the island's lowest rock (about -35)
 static const float kCloudExtent = 1000.0;  // half size of the quad; the far plane is at 1000
 
@@ -111,7 +114,8 @@ float4 PSMain(VSOutput input) : SV_Target0
     float3 L = normalize(frame.sunDirection.xyz);
     float sunAmount = saturate(L.y) * (1.0 - 0.6 * shade);
     float3 albedo = float3(0.92, 0.93, 0.96);
-    float3 skyLight = (frame.skyZenith.rgb + frame.skyHorizon.rgb) * 0.5 * 0.8;  // the sky above
+    // The light from the sky above, like a diffuse surface facing up (the irradiance cube).
+    float3 skyLight = irradianceMap.SampleLevel(irradianceSampler, float3(0, 1, 0), 0.0).rgb;
     // Thick parts are bright billows; thin edges let light through and read greyer.
     float thickness = smoothstep(0.40, 0.80, density);
     float3 lit = albedo * (frame.sunColor.rgb * sunAmount * lerp(0.30, 0.60, thickness) + skyLight);

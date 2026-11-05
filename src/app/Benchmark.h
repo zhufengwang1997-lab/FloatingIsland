@@ -28,7 +28,7 @@ public:
 
 private:
     struct Sample {
-        float frame, shadow, main, composite, ui;
+        float frame, ibl, shadow, main, composite, ui;
     };
 
     int measuredFrames_;

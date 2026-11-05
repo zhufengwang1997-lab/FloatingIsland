@@ -7,7 +7,7 @@
 class VulkanContext;
 
 // The parts of a frame that get their own GPU timer.
-enum class GpuScope : uint32_t { Frame, Shadow, Main, Composite, Ui, Count };
+enum class GpuScope : uint32_t { Frame, Ibl, Shadow, Main, Composite, Ui, Count };
 const char* gpuScopeName(GpuScope scope);
 
 // Measures GPU time per scope with timestamp queries.

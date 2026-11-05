@@ -8,6 +8,10 @@
 // Loads a SPIR-V file produced by DXC at build time.
 VkShaderModule loadShaderModule(VkDevice device, const std::string& path);
 
+// A compute pipeline: one shader stage and a layout.
+VkPipeline buildComputePipeline(VkDevice device, VkShaderModule module, const char* entry, VkPipelineLayout layout,
+                                VkPipelineCache cache = VK_NULL_HANDLE);
+
 // Fills in the ~10 structs a graphics pipeline needs, with defaults suited to this renderer:
 // triangle lists, dynamic viewport/scissor, back-face culling (CCW front), depth test LESS,
 // no blending, dynamic rendering (attachment formats instead of a VkRenderPass).

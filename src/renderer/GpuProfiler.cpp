@@ -8,6 +8,7 @@
 const char* gpuScopeName(GpuScope scope) {
     switch (scope) {
         case GpuScope::Frame: return "Frame";
+        case GpuScope::Ibl: return "IBL update";
         case GpuScope::Shadow: return "Shadow pass";
         case GpuScope::Main: return "Main pass";
         case GpuScope::Composite: return "Composite";

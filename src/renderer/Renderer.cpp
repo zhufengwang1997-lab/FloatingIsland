@@ -57,6 +57,25 @@ void setViewportAndScissor(VkCommandBuffer cmd, VkExtent2D extent) {
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
+void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                   VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+    VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = srcStage;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstStageMask = dstStage;
+    barrier.dstAccessMask = dstAccess;
+    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dep);
+}
+
+// The parts of the sky the IBL cube maps depend on (the moon and stars are not in them).
+bool sameSky(const SkyState& a, const SkyState& b) {
+    return a.zenith == b.zenith && a.horizon == b.horizon && a.below == b.below && a.glow == b.glow &&
+           a.sunDirection == b.sunDirection && a.sunDisk == b.sunDisk;
+}
+
 constexpr VkPipelineStageFlags2 kDepthStages =
     VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
 constexpr VkAccessFlags2 kDepthReadWrite =
@@ -72,9 +91,11 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
     swapchain_.create(ctx, framebufferExtent(window), vsync_);
     createRenderTargets();
     createShadowResources();
+    createIblResources();
     createFrameResources();
     createPresentSemaphores();
     createDescriptors();
+    createIblDescriptors();
     writeHdrDescriptors();
     // Pipelines compile their shaders for this GPU; the cache from the last run lets them skip that.
     pipelineCache_.init(ctx.device, ctx.physicalDevice, FI_SHADER_DIR "/../pipeline_cache.bin");
@@ -108,6 +129,13 @@ void Renderer::shutdown() {
     vkDestroyPipeline(device, foliagePipeline_, nullptr);
     vkDestroyPipeline(device, compositePipeline_, nullptr);
     vkDestroyPipeline(device, shadowPipeline_, nullptr);
+    vkDestroyPipeline(device, iblSkyPipeline_, nullptr);
+    vkDestroyPipeline(device, iblPrefilterPipeline_, nullptr);
+    vkDestroyPipeline(device, iblIrradiancePipeline_, nullptr);
+    vkDestroyPipelineLayout(device, iblPipelineLayout_, nullptr);
+    vkDestroyDescriptorPool(device, iblPool_, nullptr);
+    vkDestroyDescriptorSetLayout(device, iblSetLayout_, nullptr);
+    destroyIblResources();
     vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
     vkDestroyDescriptorPool(device, descriptorPool_, nullptr);  // also frees the sets
     vkDestroyDescriptorSetLayout(device, setLayout_, nullptr);
@@ -340,7 +368,8 @@ void Renderer::createDescriptors() {
     // Set 0: binding 0 = FrameUniforms, binding 1 = shadow map + comparison sampler,
     // binding 2 = HDR scene image (read by the composite pass with Load, so no sampler).
     // The comparison sampler is immutable (baked into the layout); MoltenVK prefers it that way.
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    // Bindings 3 and 4: the IBL specular and irradiance cube maps, with the trilinear sampler.
+    VkDescriptorSetLayoutBinding bindings[5]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -354,14 +383,21 @@ void Renderer::createDescriptors() {
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (uint32_t b = 3; b <= 4; ++b) {
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[b].pImmutableSamplers = &envSampler_;
+    }
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 3;
+    layoutInfo.bindingCount = 5;
     layoutInfo.pBindings = bindings;
     VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &setLayout_));
 
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * kFramesInFlight},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kFramesInFlight},
     };
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -380,7 +416,9 @@ void Renderer::createDescriptors() {
         VkDescriptorBufferInfo bufferInfo{f.uniforms.buffer, 0, sizeof(FrameUniforms)};
         VkDescriptorImageInfo imageInfo{VK_NULL_HANDLE, shadowMap_.view,
                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[2]{};
+        const VkDescriptorImageInfo specularInfo{VK_NULL_HANDLE, specularCube_.view, VK_IMAGE_LAYOUT_GENERAL};
+        const VkDescriptorImageInfo irradianceInfo{VK_NULL_HANDLE, irradianceCube_.view, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet writes[4]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = f.descriptorSet;
         writes[0].dstBinding = 0;
@@ -393,7 +431,129 @@ void Renderer::createDescriptors() {
         writes[1].descriptorCount = 1;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].pImageInfo = &imageInfo;
-        vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+        writes[2] = writes[1];
+        writes[2].dstBinding = 3;
+        writes[2].pImageInfo = &specularInfo;
+        writes[3] = writes[1];
+        writes[3].dstBinding = 4;
+        writes[3].pImageInfo = &irradianceInfo;
+        vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
+    }
+}
+
+void Renderer::createIblResources() {
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    envCube_ = createCubeImage(*ctx_, kEnvSize, 1, kIblFormat, usage);
+    specularCube_ = createCubeImage(*ctx_, kEnvSize, kSpecularMips, kIblFormat, usage);
+    irradianceCube_ = createCubeImage(*ctx_, kIrradianceSize, 1, kIblFormat, usage);
+    envTargetView_ = createLayerView(*ctx_, envCube_, 0, 6);
+    for (uint32_t m = 0; m < kSpecularMips; ++m) specularTargetViews_[m] = createLayerView(*ctx_, specularCube_, m, 6);
+    irradianceTargetView_ = createLayerView(*ctx_, irradianceCube_, 0, 6);
+
+    // Trilinear: between texels and, for the specular cube, between roughness mips. Cube maps are
+    // sampled seamlessly across faces in Vulkan, so the address mode hardly matters.
+    VkSamplerCreateInfo info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    info.magFilter = VK_FILTER_LINEAR;
+    info.minFilter = VK_FILTER_LINEAR;
+    info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.maxLod = static_cast<float>(kSpecularMips - 1);
+    VK_CHECK(vkCreateSampler(ctx_->device, &info, nullptr, &envSampler_));
+
+    // Into GENERAL once; they stay there (see kIblFormat).
+    ctx_->immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier2 barriers[3]{};
+        const VkImage images[3] = {envCube_.image, specularCube_.image, irradianceCube_.image};
+        for (int i = 0; i < 3; ++i) {
+            barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+            barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barriers[i].image = images[i];
+            barriers[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, 6};
+        }
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 3;
+        dep.pImageMemoryBarriers = barriers;
+        vkCmdPipelineBarrier2(cmd, &dep);
+    });
+}
+
+void Renderer::destroyIblResources() {
+    VkDevice device = ctx_->device;
+    vkDestroySampler(device, envSampler_, nullptr);
+    vkDestroyImageView(device, envTargetView_, nullptr);
+    for (VkImageView& v : specularTargetViews_) vkDestroyImageView(device, v, nullptr);
+    vkDestroyImageView(device, irradianceTargetView_, nullptr);
+    destroyImage(*ctx_, envCube_);
+    destroyImage(*ctx_, specularCube_);
+    destroyImage(*ctx_, irradianceCube_);
+}
+
+void Renderer::createIblDescriptors() {
+    VkDevice device = ctx_->device;
+    // Set 0 of the IBL compute passes: binding 0 = FrameUniforms (for the sky colors), binding 1 =
+    // the cube map read (with the trilinear sampler), binding 2 = the mip written.
+    VkDescriptorSetLayoutBinding bindings[3]{};
+    bindings[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &envSampler_};
+    bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = 3;
+    layoutInfo.pBindings = bindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &iblSetLayout_));
+
+    constexpr uint32_t kSets = kIblSets * kFramesInFlight;
+    const VkDescriptorPoolSize sizes[] = {
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSets},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets},
+    };
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.maxSets = kSets;
+    poolInfo.poolSizeCount = 3;
+    poolInfo.pPoolSizes = sizes;
+    VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &iblPool_));
+
+    // What each pass writes. Every pass reads envCube_ (the sky pass doesn't, but the binding
+    // must still hold a valid image).
+    VkImageView targets[kIblSets];
+    targets[0] = envTargetView_;
+    for (uint32_t m = 0; m < kSpecularMips; ++m) targets[1 + m] = specularTargetViews_[m];
+    targets[kIblSets - 1] = irradianceTargetView_;
+
+    for (FrameData& f : frames_) {
+        VkDescriptorSetLayout layouts[kIblSets];
+        for (VkDescriptorSetLayout& l : layouts) l = iblSetLayout_;
+        VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocInfo.descriptorPool = iblPool_;
+        allocInfo.descriptorSetCount = kIblSets;
+        allocInfo.pSetLayouts = layouts;
+        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, f.iblSets));
+
+        const VkDescriptorBufferInfo bufferInfo{f.uniforms.buffer, 0, sizeof(FrameUniforms)};
+        const VkDescriptorImageInfo sourceInfo{VK_NULL_HANDLE, envCube_.view, VK_IMAGE_LAYOUT_GENERAL};
+        for (uint32_t i = 0; i < kIblSets; ++i) {
+            const VkDescriptorImageInfo targetInfo{VK_NULL_HANDLE, targets[i], VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet writes[3]{};
+            for (uint32_t b = 0; b < 3; ++b) {
+                writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[b].dstSet = f.iblSets[i];
+                writes[b].dstBinding = b;
+                writes[b].descriptorCount = 1;
+                writes[b].descriptorType = bindings[b].descriptorType;
+            }
+            writes[0].pBufferInfo = &bufferInfo;
+            writes[1].pImageInfo = &sourceInfo;
+            writes[2].pImageInfo = &targetInfo;
+            vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+        }
     }
 }
 
@@ -485,6 +645,62 @@ void Renderer::createPipelines() {
                          .build(device, pipelineCache_.handle());
     vkDestroyShaderModule(device, cloudsVs, nullptr);
     vkDestroyShaderModule(device, cloudsPs, nullptr);
+
+    // IBL compute passes: their own set layout, and 16 bytes of push constants (IblParams).
+    VkPushConstantRange iblPush{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+    VkPipelineLayoutCreateInfo iblLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    iblLayoutInfo.setLayoutCount = 1;
+    iblLayoutInfo.pSetLayouts = &iblSetLayout_;
+    iblLayoutInfo.pushConstantRangeCount = 1;
+    iblLayoutInfo.pPushConstantRanges = &iblPush;
+    VK_CHECK(vkCreatePipelineLayout(device, &iblLayoutInfo, nullptr, &iblPipelineLayout_));
+    auto compute = [&](const char* file, const char* entry) {
+        VkShaderModule module = loadShaderModule(device, std::string(FI_SHADER_DIR "/") + file);
+        VkPipeline pipeline = buildComputePipeline(device, module, entry, iblPipelineLayout_, pipelineCache_.handle());
+        vkDestroyShaderModule(device, module, nullptr);
+        return pipeline;
+    };
+    iblSkyPipeline_ = compute("ibl_sky.cs.spv", "CSSky");
+    iblPrefilterPipeline_ = compute("ibl_prefilter.cs.spv", "CSPrefilter");
+    iblIrradiancePipeline_ = compute("ibl_irradiance.cs.spv", "CSIrradiance");
+}
+
+// Remakes the three IBL cube maps from this frame's sky. Before the shadow pass, outside rendering.
+void Renderer::recordIblUpdate(VkCommandBuffer cmd, const FrameData& frame) {
+    struct Push {
+        uint32_t size;
+        float roughness;
+        uint32_t sampleCount;
+        uint32_t pad;
+    };
+    auto dispatch = [&](VkPipeline pipeline, uint32_t set, Push push) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, iblPipelineLayout_, 0, 1, &frame.iblSets[set], 0,
+                                nullptr);
+        vkCmdPushConstants(cmd, iblPipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        const uint32_t groups = (push.size + 7) / 8;  // 8 x 8 threads per group, one group row per face
+        vkCmdDispatch(cmd, groups, groups, 6);
+    };
+
+    // The cube maps are shared by the frames in flight: the previous frame's shaders may still be
+    // reading them.
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    dispatch(iblSkyPipeline_, 0, {kEnvSize, 0.0f, 0, 0});
+
+    // The sky must be written before it is blurred.
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    for (uint32_t m = 0; m < kSpecularMips; ++m) {
+        const float roughness = static_cast<float>(m) / static_cast<float>(kSpecularMips - 1);
+        dispatch(iblPrefilterPipeline_, 1 + m, {kEnvSize >> m, roughness, 64, 0});
+    }
+    dispatch(iblIrradiancePipeline_, kIblSets - 1, {kIrradianceSize, 0.0f, 256, 0});
+
+    // Done before the main pass's fragment shaders sample them.
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 }
 
 void Renderer::recreateSwapchain() {
@@ -573,6 +789,7 @@ void Renderer::drawFrame(const Camera& camera) {
     uniforms.skyGlow = glm::vec4(sky.glow, 0.0f);
     uniforms.skySun = glm::vec4(sky.sunDirection, 0.0f);
     uniforms.skySunDisk = glm::vec4(sky.sunDisk, 0.0f);
+    uniforms.ibl = glm::vec4(iblDiffuse, static_cast<float>(kSpecularMips - 1), iblSpecular, 0.0f);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
     VK_CHECK(vmaFlushAllocation(ctx_->allocator, frame.uniforms.allocation, 0, sizeof(uniforms)));
 
@@ -588,6 +805,17 @@ void Renderer::drawFrame(const Camera& camera) {
     cullObjects(cullViewProj_, camera.position);
     profiler_.reset(cmd, frameIndex_);
     profiler_.begin(cmd, frameIndex_, GpuScope::Frame);
+
+    // Timed every frame (empty when nothing changed): the profiler reads all of a frame's queries
+    // at once, and one never written would hold up the rest.
+    profiler_.begin(cmd, frameIndex_, GpuScope::Ibl);
+    if (iblEveryFrame || !iblValid_ || !sameSky(sky, iblSky_)) {
+        recordIblUpdate(cmd, frame);
+        iblSky_ = sky;
+        iblValid_ = true;
+        stats_.iblUpdated = true;
+    }
+    profiler_.end(cmd, frameIndex_, GpuScope::Ibl);
 
     const uint32_t repeat = std::max(sceneRepeat, 1u);
     profiler_.begin(cmd, frameIndex_, GpuScope::Shadow);

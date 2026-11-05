@@ -97,3 +97,46 @@ void destroyImage(const VulkanContext& ctx, Image& image) {
     if (image.image) vmaDestroyImage(ctx.allocator, image.image, image.allocation);
     image = Image{};
 }
+
+Image createCubeImage(const VulkanContext& ctx, uint32_t size, uint32_t mipLevels, VkFormat format,
+                      VkImageUsageFlags usage) {
+    VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent = {size, size, 1};
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.arrayLayers = 6;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = usage;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    Image image;
+    image.format = format;
+    image.extent = {size, size};
+    VK_CHECK(vmaCreateImage(ctx.allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, nullptr));
+
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = image.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    viewInfo.format = format;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 6};
+    VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &image.view));
+    return image;
+}
+
+VkImageView createLayerView(const VulkanContext& ctx, const Image& image, uint32_t mip, uint32_t layers) {
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = image.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    viewInfo.format = image.format;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, 0, layers};
+    VkImageView view;
+    VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &view));
+    return view;
+}

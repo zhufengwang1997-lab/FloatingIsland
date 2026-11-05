@@ -71,8 +71,12 @@ set(SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 file(GLOB SHADER_HEADERS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.hlsli")
 set(SHADER_OUTPUTS "")
 
+# Optional 4th argument: the output name, for files with several entry points of one stage.
 function(add_hlsl_shader source stage entry)
   get_filename_component(name "${source}" NAME_WE)
+  if(ARGC GREATER 3)
+    set(name "${ARGV3}")
+  endif()
   set(output "${SHADER_OUT_DIR}/${name}.${stage}.spv")
   add_custom_command(
     OUTPUT "${output}"
@@ -96,6 +100,9 @@ add_hlsl_shader(shaders/clouds.hlsl vs VSMain)
 add_hlsl_shader(shaders/clouds.hlsl ps PSMain)
 add_hlsl_shader(shaders/composite.hlsl vs VSMain)
 add_hlsl_shader(shaders/composite.hlsl ps PSMain)
+add_hlsl_shader(shaders/ibl.hlsl cs CSSky ibl_sky)
+add_hlsl_shader(shaders/ibl.hlsl cs CSPrefilter ibl_prefilter)
+add_hlsl_shader(shaders/ibl.hlsl cs CSIrradiance ibl_irradiance)
 add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 
 # ---------------------------------------------------------------------------

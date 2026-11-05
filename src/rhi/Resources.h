@@ -33,3 +33,10 @@ Buffer uploadBuffer(VulkanContext& ctx, const void* data, VkDeviceSize size, VkB
 Image createImage(const VulkanContext& ctx, VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
                   VkImageAspectFlags aspect);
 void destroyImage(const VulkanContext& ctx, Image& image);
+
+// A cube map (6 layers) of size x size texels with mipLevels mips. Its view is a cube view of all
+// mips, for sampling; createLayerView makes the 2D-array views compute shaders write mips through.
+Image createCubeImage(const VulkanContext& ctx, uint32_t size, uint32_t mipLevels, VkFormat format,
+                      VkImageUsageFlags usage);
+// A 2D-array view of one mip of all layers of an image (for RWTexture2DArray in a compute shader).
+VkImageView createLayerView(const VulkanContext& ctx, const Image& image, uint32_t mip, uint32_t layers);

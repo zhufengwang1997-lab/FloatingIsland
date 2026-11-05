@@ -21,6 +21,19 @@ VkShaderModule loadShaderModule(VkDevice device, const std::string& path) {
     return module;
 }
 
+VkPipeline buildComputePipeline(VkDevice device, VkShaderModule module, const char* entry, VkPipelineLayout layout,
+                                VkPipelineCache cache) {
+    VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    info.stage.module = module;
+    info.stage.pName = entry;
+    info.layout = layout;
+    VkPipeline pipeline;
+    VK_CHECK(vkCreateComputePipelines(device, cache, 1, &info, nullptr, &pipeline));
+    return pipeline;
+}
+
 GraphicsPipelineBuilder& GraphicsPipelineBuilder::stage(VkShaderStageFlagBits stage, VkShaderModule module,
                                                         const char* entry) {
     VkPipelineShaderStageCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};

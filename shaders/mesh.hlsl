@@ -1,10 +1,15 @@
 // Physically based shading (metallic-roughness, GGX) for one directional sun light,
-// with a PCF shadow map and hemisphere ambient. Writes linear HDR radiance; exposure and
+// with a PCF shadow map and image-based ambient light from the sky. Writes linear HDR radiance; exposure and
 // tonemapping happen later in composite.hlsl.
 #include "common.hlsli"
 
 [[vk::combinedImageSampler]][[vk::binding(1, 0)]] Texture2D<float> shadowMap;
 [[vk::combinedImageSampler]][[vk::binding(1, 0)]] SamplerComparisonState shadowSampler;
+// Image-based lighting, made from the sky by shaders/ibl.hlsl.
+[[vk::combinedImageSampler]][[vk::binding(3, 0)]] TextureCube<float4> specularMap;  // mip = roughness
+[[vk::combinedImageSampler]][[vk::binding(3, 0)]] SamplerState specularSampler;
+[[vk::combinedImageSampler]][[vk::binding(4, 0)]] TextureCube<float4> irradianceMap;
+[[vk::combinedImageSampler]][[vk::binding(4, 0)]] SamplerState irradianceSampler;
 
 static const float PI = 3.14159265;
 
@@ -80,12 +85,18 @@ float SunShadow(float3 worldPos)
     return sum / 9.0;
 }
 
-// Ambient light from a direction: the average sky above blended with the dimmer haze below.
-float3 Hemisphere(float3 dir)
+// The second half of the split-sum approximation: how much of the prefiltered environment a
+// surface reflects, as f0 * scale + bias, depending on roughness and view angle. Usually a small
+// lookup texture computed once; this is Karis's analytic fit of it ("Physically Based Shading on
+// Mobile", 2014). At grazing angles it goes towards 1: everything turns into a mirror (Fresnel).
+float3 EnvBRDFApprox(float3 f0, float roughness, float NoV)
 {
-    float3 sky = (frame.skyZenith.rgb + frame.skyHorizon.rgb) * 0.5;
-    float3 ground = frame.skyBelow.rgb * 0.5;
-    return lerp(ground, sky, dir.y * 0.5 + 0.5);
+    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+    float4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+    float2 ab = float2(-1.04, 1.04) * a004 + r.zw;
+    return f0 * ab.x + ab.y;
 }
 
 float4 PSMain(VSOutput input) : SV_Target0
@@ -115,10 +126,18 @@ float4 PSMain(VSOutput input) : SV_Target0
     float shadow = NoL > 0.0 ? SunShadow(input.worldPos) : 0.0;
     float3 direct = (diffuse + specular) * frame.sunColor.rgb * NoL * shadow;
 
-    // Stand-in for image-based lighting until the sky gets a proper environment map.
+    // Image-based lighting: the light of the whole sky. Diffuse: the irradiance arriving around N.
+    // Specular: the sky in the mirror direction R, blurred as much as the roughness blurs it.
     float3 R = reflect(-V, N);
-    float3 ambient = Hemisphere(N) * diffuseColor * 0.6
-                   + Hemisphere(R) * f0 * (1.0 - roughness * 0.7) * 0.6;
+    float3 irradiance = irradianceMap.SampleLevel(irradianceSampler, N, 0.0).rgb;
+    float3 prefiltered = specularMap.SampleLevel(specularSampler, R, roughness * frame.ibl.y).rgb;
+    // Reflections that point into the surface (possible with bumpy normals) see the inside of the
+    // island, not the sky: fade them out.
+    float horizon = saturate(1.0 + dot(R, N));
+    // Nothing here knows that grass stands among grass or that a trunk is inside its tree, so the
+    // diffuse part is turned down a little everywhere (ibl.x < 1) as a crude ambient occlusion.
+    float3 ambient = irradiance * diffuseColor * frame.ibl.x
+                   + prefiltered * EnvBRDFApprox(f0, roughness, NoV) * horizon * horizon * frame.ibl.z;
 
     // Alpha 1 marks geometry; the composite pass draws the sky where alpha is still 0.
     return float4(direct + ambient, 1.0);

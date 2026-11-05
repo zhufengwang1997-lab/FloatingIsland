@@ -102,7 +102,7 @@ void DebugUi::drawStats(const Renderer& renderer, const Camera& camera) {
     const float cpuMs = cpuHistory_[(historyOffset_ + kHistory - 1) % kHistory];
     ImGui::Text("CPU frame   %6.2f ms  (%.0f fps)", cpuMs, cpuMs > 0.0f ? 1000.0f / cpuMs : 0.0f);
     if (gpu.supported()) {
-        for (GpuScope s : {GpuScope::Frame, GpuScope::Shadow, GpuScope::Main, GpuScope::Composite, GpuScope::Ui}) {
+        for (GpuScope s : {GpuScope::Frame, GpuScope::Ibl, GpuScope::Shadow, GpuScope::Main, GpuScope::Composite, GpuScope::Ui}) {
             ImGui::Text("GPU %-12s%6.3f ms", gpuScopeName(s), gpu.milliseconds(s));
         }
         // The composite pass can include waiting for the display to release the swapchain image,
@@ -184,6 +184,13 @@ void DebugUi::drawSettings(Renderer& renderer) {
         }
         ImGui::EndTable();
     }
+
+    ImGui::SeparatorText("Ambient light (IBL)");
+    ImGui::SliderFloat("Diffuse##ibl", &renderer.iblDiffuse, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Specular##ibl", &renderer.iblSpecular, 0.0f, 2.0f, "%.2f");
+    ImGui::Checkbox("Update every frame", &renderer.iblEveryFrame);
+    ImGui::SameLine();
+    ImGui::TextDisabled(renderer.stats().iblUpdated ? "(updated)" : "(unchanged sky)");
 
     ImGui::SeparatorText("Camera");
     ImGui::SliderFloat("Exposure", &renderer.exposure, 0.1f, 4.0f, "%.2f");

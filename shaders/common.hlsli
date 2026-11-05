@@ -22,9 +22,12 @@ struct FrameData
     float4 skyGlow;           // rgb: sunrise / sunset band along the horizon
     float4 skySun;            // xyz: unit vector towards the real sun (also when it has set)
     float4 skySunDisk;        // rgb: radiance of the sun disk and its halo
+    float4 ibl;               // x: diffuse IBL intensity, y: mip of the specular cube for roughness 1,
+                              // z: specular IBL intensity
 };
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
+#ifndef COMMON_NO_OBJECT
 // Per-draw data, pushed with vkCmdPushConstants. GLM matrices are column-major,
 // which matches HLSL's default column_major packing.
 struct ObjectData
@@ -32,6 +35,7 @@ struct ObjectData
     float4x4 model;
 };
 [[vk::push_constant]] ObjectData object;
+#endif
 
 // Sky radiance seen along a direction (HDR, before exposure), without the sun disk, stars and
 // moon (SkyBackground in composite.hlsl adds those): a horizon-to-zenith gradient, a haze below the
@@ -48,6 +52,7 @@ float3 SkyRadiance(float3 dir)
     return sky;
 }
 
+#ifndef COMMON_NO_OBJECT
 // Per-instance data (vertex binding 1). Matches InstanceData in src/scene/Mesh.h.
 // Objects drawn once use a single identity instance.
 struct InstanceInput
@@ -105,5 +110,6 @@ float3 InstanceNormalToWorld(float3 n, InstanceInput inst)
 {
     return mul((float3x3)object.model, RotateYaw(n, inst.params.x));  // uniform scale only
 }
+#endif  // COMMON_NO_OBJECT
 
 #endif

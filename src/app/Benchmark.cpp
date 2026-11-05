@@ -68,7 +68,8 @@ void Benchmark::record(int frame, float cpuMs, const GpuProfiler& gpu) {
     if (gpu.supported() && gpu.sampleCount() != lastGpuSample_) {
         lastGpuSample_ = gpu.sampleCount();
         const float perPass = 1.0f / static_cast<float>(sceneRepeat_);
-        gpu_.push_back({gpu.lastMilliseconds(GpuScope::Frame), gpu.lastMilliseconds(GpuScope::Shadow) * perPass,
+        gpu_.push_back({gpu.lastMilliseconds(GpuScope::Frame), gpu.lastMilliseconds(GpuScope::Ibl),
+                        gpu.lastMilliseconds(GpuScope::Shadow) * perPass,
                         gpu.lastMilliseconds(GpuScope::Main) * perPass, gpu.lastMilliseconds(GpuScope::Composite),
                         gpu.lastMilliseconds(GpuScope::Ui)});
     }
@@ -93,6 +94,7 @@ void Benchmark::report() const {
     };
     row("CPU frame", cpuMs_);
     row("GPU scene (sh+main)", scene);
+    row("GPU IBL update", column(&Sample::ibl));
     row("GPU shadow pass", column(&Sample::shadow));
     row("GPU main pass", column(&Sample::main));
     row("GPU composite*", column(&Sample::composite));
@@ -106,10 +108,10 @@ void Benchmark::report() const {
         std::fprintf(stderr, "Cannot write %s\n", csvPath_.c_str());
         return;
     }
-    std::fprintf(f, "sample,gpu_frame_ms,gpu_shadow_ms,gpu_main_ms,gpu_composite_ms,gpu_ui_ms\n");
+    std::fprintf(f, "sample,gpu_frame_ms,gpu_ibl_ms,gpu_shadow_ms,gpu_main_ms,gpu_composite_ms,gpu_ui_ms\n");
     for (size_t i = 0; i < gpu_.size(); ++i) {
         const Sample& s = gpu_[i];
-        std::fprintf(f, "%zu,%.4f,%.4f,%.4f,%.4f,%.4f\n", i, s.frame, s.shadow, s.main, s.composite, s.ui);
+        std::fprintf(f, "%zu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n", i, s.frame, s.ibl, s.shadow, s.main, s.composite, s.ui);
     }
     std::fclose(f);
     std::printf("Per-frame GPU timings written to %s\n", csvPath_.c_str());

@@ -24,6 +24,7 @@ struct AppOptions {
     bool showUi = true;          // debug panel visible at start
     float timeOfDay = 15.0f;     // hours, 0..24
     bool dayCycle = false;       // let the time of day run by itself
+    bool iblEveryFrame = false;  // remake the IBL cube maps every frame (to measure the update)
     bool grassShadows = false;   // draw grass into the shadow map (off by default; on for A/B tests)
 };
 

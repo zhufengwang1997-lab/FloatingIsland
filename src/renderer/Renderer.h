@@ -35,6 +35,7 @@ struct FrameStats {
     uint32_t shadowChunksVisible = 0;  // drawn in the shadow pass (of the chunks that cast shadows)
     uint32_t shadowChunksTotal = 0;
     uint64_t instancesDrawn = 0;        // main pass
+    bool iblUpdated = false;            // the IBL cube maps were remade this frame
 };
 
 // Draws the scene in four passes per frame:
@@ -98,6 +99,11 @@ public:
     float lodStart = 35.0f;
     float lodEnd = 110.0f;
     float lodMinFraction = 0.25f;  // clamped to >= kMinLodFraction
+    // Image-based lighting: ambient light from cube maps made from the sky (shaders/ibl.hlsl).
+    // They are remade whenever the sky changes; iblEveryFrame remakes them anyway, to measure it.
+    float iblDiffuse = 0.7f;   // < 1: a crude stand-in for ambient occlusion
+    float iblSpecular = 1.0f;
+    bool iblEveryFrame = false;
 
     // Objects, for the debug UI.
     uint32_t objectCount() const { return static_cast<uint32_t>(objects_.size()); }
@@ -134,7 +140,17 @@ private:
         glm::vec4 skyGlow;     // rgb: sunrise / sunset band along the horizon
         glm::vec4 skySun;      // xyz: direction of the real sun (also below the horizon)
         glm::vec4 skySunDisk;  // rgb: radiance of the sun disk and halo
+        glm::vec4 ibl;         // x: diffuse IBL intensity, y: specular cube mip for roughness 1, z: specular
     };
+
+    // IBL cube maps. All three stay in VK_IMAGE_LAYOUT_GENERAL, which allows both the compute
+    // shaders' storage writes and sampling, so updates need only memory barriers.
+    static constexpr VkFormat kIblFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    static constexpr uint32_t kEnvSize = 64;         // sky radiance, per face
+    static constexpr uint32_t kSpecularMips = 5;     // 64, 32, 16, 8, 4: roughness 0, 0.25 ... 1
+    static constexpr uint32_t kIrradianceSize = 16;  // diffuse light changes slowly with direction
+    // Compute descriptor sets per frame: [0] sky, [1 + m] prefilter mip m, [last] irradiance.
+    static constexpr uint32_t kIblSets = 2 + kSpecularMips;
 
     // Everything the CPU must not touch again until the GPU has finished that frame.
     struct FrameData {
@@ -144,6 +160,7 @@ private:
         VkFence inFlight = VK_NULL_HANDLE;           // GPU has finished this frame's commands
         Buffer uniforms;                             // FrameUniforms, persistently mapped
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        VkDescriptorSet iblSets[kIblSets]{};  // the IBL compute passes (they read this frame's uniforms)
     };
 
     // What one vkCmdDrawIndexed draws: some of the mesh's indices (a tile of a large mesh, or all of
@@ -188,6 +205,10 @@ private:
     void writeHdrDescriptors();   // binding 2 of every frame's set; after the HDR image changes
     void createShadowResources();
     void createDescriptors();
+    void createIblResources();  // cube maps, their views and sampler (before createDescriptors)
+    void destroyIblResources();
+    void createIblDescriptors();
+    void recordIblUpdate(VkCommandBuffer cmd, const FrameData& frame);
     void createPipelines();
     void recreateSwapchain();
     glm::mat4 lightViewProj() const;
@@ -229,6 +250,22 @@ private:
     VkPipeline cloudPipeline_ = VK_NULL_HANDLE;  // the sea of clouds below the island
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
     PipelineCache pipelineCache_;  // build/pipeline_cache.bin
+
+    Image envCube_;         // the sky's radiance
+    Image specularCube_;    // envCube_ prefiltered for roughness 0..1, one roughness per mip
+    Image irradianceCube_;  // diffuse irradiance / pi
+    VkImageView envTargetView_ = VK_NULL_HANDLE;  // 2D-array views the compute shaders write through
+    VkImageView specularTargetViews_[kSpecularMips]{};
+    VkImageView irradianceTargetView_ = VK_NULL_HANDLE;
+    VkSampler envSampler_ = VK_NULL_HANDLE;  // trilinear, for all cube maps
+    VkDescriptorSetLayout iblSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool iblPool_ = VK_NULL_HANDLE;
+    VkPipelineLayout iblPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline iblSkyPipeline_ = VK_NULL_HANDLE;
+    VkPipeline iblPrefilterPipeline_ = VK_NULL_HANDLE;
+    VkPipeline iblIrradiancePipeline_ = VK_NULL_HANDLE;
+    SkyState iblSky_;        // the sky the cube maps were made from
+    bool iblValid_ = false;  // false until the first update
 
     std::vector<RenderObject> objects_;
     Buffer identityInstance_;  // one default InstanceData, shared by every non-instanced object

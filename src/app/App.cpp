@@ -23,6 +23,7 @@ void App::run(const AppOptions& options) {
         renderer_.frustumCulling = options.frustumCulling;
         renderer_.distanceLod = options.distanceLod;
         renderer_.cloudSea = options.cloudSea;
+        renderer_.iblEveryFrame = options.iblEveryFrame;
         ui_.visible = false;
         mainLoop(benchmark.totalFrames(), options.screenshotPath, &benchmark);
         benchmark.report();
@@ -31,6 +32,7 @@ void App::run(const AppOptions& options) {
         renderer_.frustumCulling = options.frustumCulling;
         renderer_.distanceLod = options.distanceLod;
         renderer_.cloudSea = options.cloudSea;
+        renderer_.iblEveryFrame = options.iblEveryFrame;
         ui_.visible = options.showUi;
         mainLoop(options.maxFrames, options.screenshotPath, nullptr);
     }

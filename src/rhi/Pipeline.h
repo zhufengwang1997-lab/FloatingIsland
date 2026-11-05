@@ -19,6 +19,8 @@ public:
     GraphicsPipelineBuilder& cull(VkCullModeFlags mode, VkFrontFace front = VK_FRONT_FACE_COUNTER_CLOCKWISE);
     GraphicsPipelineBuilder& depth(bool test, bool write, VkCompareOp compare = VK_COMPARE_OP_LESS);
     GraphicsPipelineBuilder& depthBias(float constantFactor, float slopeFactor);
+    // Extra state set with vkCmdSet* at draw time, e.g. VK_DYNAMIC_STATE_DEPTH_BIAS.
+    GraphicsPipelineBuilder& dynamicState(VkDynamicState state);
     GraphicsPipelineBuilder& colorFormat(VkFormat format);
     GraphicsPipelineBuilder& depthFormat(VkFormat format);
     GraphicsPipelineBuilder& layout(VkPipelineLayout layout);
@@ -37,6 +39,7 @@ private:
     bool depthBias_ = false;
     float biasConstant_ = 0.0f;
     float biasSlope_ = 0.0f;
+    std::vector<VkDynamicState> dynamicStates_{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     std::vector<VkFormat> colorFormats_;
     VkFormat depthFormat_ = VK_FORMAT_UNDEFINED;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;

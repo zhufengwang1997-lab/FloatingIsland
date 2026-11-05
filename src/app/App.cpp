@@ -12,13 +12,13 @@
 #include <cstdio>
 #include <stdexcept>
 
-void App::run(int maxFrames, const std::string& screenshotPath) {
-    init();
+void App::run(int maxFrames, const std::string& screenshotPath, bool vsync) {
+    init(vsync);
     mainLoop(maxFrames, screenshotPath);
     shutdown();
 }
 
-void App::init() {
+void App::init(bool vsync) {
     // Hand GLFW the loader we link against, instead of letting it search for libvulkan itself.
     glfwInitVulkanLoader(vkGetInstanceProcAddr);
     if (!glfwInit()) throw std::runtime_error("glfwInit failed");
@@ -33,11 +33,20 @@ void App::init() {
         static_cast<App*>(glfwGetWindowUserPointer(w))->renderer_.onFramebufferResized();
     });
     glfwSetKeyCallback(window_, [](GLFWwindow* w, int key, int, int action, int) {
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) glfwSetWindowShouldClose(w, GLFW_TRUE);
+        if (action != GLFW_PRESS) return;
+        if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(w, GLFW_TRUE);
+        if (key == GLFW_KEY_F1) {
+            DebugUi& ui = static_cast<App*>(glfwGetWindowUserPointer(w))->ui_;
+            ui.visible = !ui.visible;
+        }
     });
 
     ctx_.init(window_);
+    renderer_.setVsync(vsync);  // before init, so the first swapchain already uses it
     renderer_.init(ctx_, window_);
+    std::printf("Present mode: %s\n", presentModeName(renderer_.swapchain().presentMode));
+    ui_.init(window_, ctx_, renderer_);
+    ui_.setVsync(vsync);  // after our callbacks, which ImGui chains to
     loadScene();
 }
 
@@ -72,8 +81,10 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
         const double frameStart = glfwGetTime();
-        camera_.update(window_, static_cast<float>(frameStart - lastFrame));
+        const float dt = static_cast<float>(frameStart - lastFrame);
         lastFrame = frameStart;
+        if (!ui_.wantsInput()) camera_.update(window_, dt);
+        ui_.build(renderer_, camera_, dt * 1000.0f);
         if (!screenshotPath.empty() && totalFrames + 1 == maxFrames) renderer_.requestCapture(screenshotPath);
         renderer_.drawFrame(camera_);
         if (maxFrames > 0 && ++totalFrames >= maxFrames) break;
@@ -91,10 +102,19 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
             frames = 0;
         }
     }
+
+    // Averages for automated runs (--frames), so measurements can be compared between commits.
+    const GpuProfiler& gpu = renderer_.profiler();
+    if (maxFrames > 0 && gpu.supported()) {
+        std::printf("GPU ms (smoothed): frame %.3f | shadow %.3f | main %.3f | ui %.3f\n",
+                    gpu.milliseconds(GpuScope::Frame), gpu.milliseconds(GpuScope::Shadow),
+                    gpu.milliseconds(GpuScope::Main), gpu.milliseconds(GpuScope::Ui));
+    }
 }
 
 void App::shutdown() {
     vkDeviceWaitIdle(ctx_.device);
+    ui_.shutdown();
     renderer_.shutdown();
     ctx_.shutdown();
     glfwDestroyWindow(window_);

@@ -58,6 +58,11 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::depthBias(float constantFactor
     return *this;
 }
 
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::dynamicState(VkDynamicState state) {
+    dynamicStates_.push_back(state);
+    return *this;
+}
+
 GraphicsPipelineBuilder& GraphicsPipelineBuilder::colorFormat(VkFormat format) {
     colorFormats_.push_back(format);
     return *this;
@@ -87,10 +92,9 @@ VkPipeline GraphicsPipelineBuilder::build(VkDevice device) const {
     VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
     viewport.viewportCount = 1;
     viewport.scissorCount = 1;
-    const VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dynamic.dynamicStateCount = 2;
-    dynamic.pDynamicStates = dynamicStates;
+    dynamic.dynamicStateCount = static_cast<uint32_t>(dynamicStates_.size());
+    dynamic.pDynamicStates = dynamicStates_.data();
 
     VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     raster.polygonMode = VK_POLYGON_MODE_FILL;

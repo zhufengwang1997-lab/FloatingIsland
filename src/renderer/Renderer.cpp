@@ -8,6 +8,9 @@
 
 #include <GLFW/glfw3.h>
 
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
@@ -64,17 +67,19 @@ constexpr VkAccessFlags2 kDepthReadWrite =
 void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
     ctx_ = &ctx;
     window_ = window;
-    swapchain_.create(ctx, framebufferExtent(window));
+    swapchain_.create(ctx, framebufferExtent(window), vsync_);
     createDepthImage();
     createShadowResources();
     createFrameResources();
     createPresentSemaphores();
     createDescriptors();
     createPipelines();
+    profiler_.init(ctx);
 }
 
 void Renderer::shutdown() {
     VkDevice device = ctx_->device;
+    profiler_.shutdown(device);
     for (RenderObject& o : objects_) {
         destroyBuffer(ctx_->allocator, o.mesh.vertices);
         destroyBuffer(ctx_->allocator, o.mesh.indices);
@@ -278,7 +283,8 @@ void Renderer::createPipelines() {
                           .stage(VK_SHADER_STAGE_VERTEX_BIT, shadowVs, "VSMain")
                           .vertexInput({binding}, {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)}})
                           .cull(VK_CULL_MODE_NONE)
-                          .depthBias(1.25f, 2.0f)
+                          .depthBias(0.0f, 0.0f)  // enabled; the factors are set per frame
+                          .dynamicState(VK_DYNAMIC_STATE_DEPTH_BIAS)
                           .depthFormat(kDepthFormat)
                           .layout(pipelineLayout_)
                           .build(device);
@@ -299,13 +305,19 @@ void Renderer::recreateSwapchain() {
     destroyPresentSemaphores();
     destroyImage(*ctx_, depth_);
     swapchain_.destroy(ctx_->device);
-    swapchain_.create(*ctx_, size);
+    swapchain_.create(*ctx_, size, vsync_);
     createDepthImage();
     createPresentSemaphores();
     if (swapchain_.format != oldFormat) {
         throw std::runtime_error("Swapchain format changed; pipeline would need rebuilding");
     }
-    framebufferResized_ = false;
+    swapchainDirty_ = false;
+}
+
+void Renderer::setVsync(bool enabled) {
+    if (enabled == vsync_) return;
+    vsync_ = enabled;
+    swapchainDirty_ = true;
 }
 
 // ---- Per frame ------------------------------------------------------------------------------------
@@ -326,6 +338,8 @@ void Renderer::drawFrame(const Camera& camera) {
 
     // 1. Wait until the GPU is done with the last use of this frame's resources.
     VK_CHECK(vkWaitForFences(device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
+    // That frame's timestamps are now available too.
+    profiler_.collect(device, frameIndex_);
 
     // 2. Get the next swapchain image.
     uint32_t imageIndex = 0;
@@ -359,8 +373,32 @@ void Renderer::drawFrame(const Camera& camera) {
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
     const bool capture = !capturePath_.empty();
+    stats_ = FrameStats{};
+    profiler_.reset(cmd, frameIndex_);
+    profiler_.begin(cmd, frameIndex_, GpuScope::Frame);
+
+    profiler_.begin(cmd, frameIndex_, GpuScope::Shadow);
     recordShadowPass(cmd, frame.descriptorSet);
-    recordMainPass(cmd, imageIndex, frame.descriptorSet, capture);
+    profiler_.end(cmd, frameIndex_, GpuScope::Shadow);
+
+    profiler_.begin(cmd, frameIndex_, GpuScope::Main);
+    recordMainPass(cmd, imageIndex, frame.descriptorSet);
+    profiler_.end(cmd, frameIndex_, GpuScope::Main);
+
+    profiler_.begin(cmd, frameIndex_, GpuScope::Ui);
+    recordUiPass(cmd, imageIndex);
+    profiler_.end(cmd, frameIndex_, GpuScope::Ui);
+
+    VkImage image = swapchain_.images[imageIndex];
+    if (capture) {
+        recordCapture(cmd, image);
+    } else {
+        // Hand the image to the presentation engine; the present waits on our semaphore.
+        transitionImage(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
+    }
+    profiler_.end(cmd, frameIndex_, GpuScope::Frame);
     VK_CHECK(vkEndCommandBuffer(cmd));
 
     // 5. Submit: start writing color only after the image is acquired; signal when done.
@@ -385,6 +423,8 @@ void Renderer::drawFrame(const Camera& camera) {
     if (capture) {
         // Debug feature, so simply wait for this frame instead of pipelining the readback.
         VK_CHECK(vkWaitForFences(device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
+    // That frame's timestamps are now available too.
+    profiler_.collect(device, frameIndex_);
         writeCapture(capturePath_);
         capturePath_.clear();
     }
@@ -397,7 +437,7 @@ void Renderer::drawFrame(const Camera& camera) {
     present.pSwapchains = &swapchain_.handle;
     present.pImageIndices = &imageIndex;
     VkResult result = vkQueuePresentKHR(ctx_->graphicsQueue, &present);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized_) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || swapchainDirty_) {
         recreateSwapchain();
     } else {
         VK_CHECK(result);
@@ -406,8 +446,10 @@ void Renderer::drawFrame(const Camera& camera) {
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 }
 
-void Renderer::drawObjects(VkCommandBuffer cmd) const {
+void Renderer::drawObjects(VkCommandBuffer cmd) {
     for (const RenderObject& o : objects_) {
+        ++stats_.drawCalls;
+        stats_.triangles += o.mesh.indexCount / 3;
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &o.model);
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &o.mesh.vertices.buffer, &offset);
@@ -438,6 +480,7 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
     setViewportAndScissor(cmd, shadowMap_.extent);
+    vkCmdSetDepthBias(cmd, shadowBiasConstant, 0.0f, shadowBiasSlope);
     drawObjects(cmd);
     vkCmdEndRendering(cmd);
 
@@ -448,7 +491,7 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set) {
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 }
 
-void Renderer::recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set, bool capture) {
+void Renderer::recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set) {
     VkImage image = swapchain_.images[imageIndex];
     // Previous contents don't matter (we clear), so transition from UNDEFINED.
     transitionImage(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -486,15 +529,34 @@ void Renderer::recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescri
     setViewportAndScissor(cmd, swapchain_.extent);
     drawObjects(cmd);
     vkCmdEndRendering(cmd);
+}
 
-    if (capture) {
-        recordCapture(cmd, image);
-        return;
-    }
-    // Hand the image to the presentation engine; the present waits on our semaphore.
-    transitionImage(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
+// Draws ImGui on top of the main pass. The image stays in COLOR_ATTACHMENT_OPTIMAL.
+void Renderer::recordUiPass(VkCommandBuffer cmd, uint32_t imageIndex) {
+    ImDrawData* drawData = ImGui::GetCurrentContext() ? ImGui::GetDrawData() : nullptr;
+    if (!drawData) return;
+
+    // Separate rendering scope, so the main pass's color writes must finish first (write after write).
+    transitionImage(cmd, swapchain_.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = swapchain_.views[imageIndex];
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;  // keep the scene
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea = {{0, 0}, swapchain_.extent};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &rendering);
+    ImGui_ImplVulkan_RenderDrawData(drawData, cmd);  // sets its own pipeline, viewport and scissor
+    vkCmdEndRendering(cmd);
 }
 
 // Copies the finished swapchain image into captureBuffer_, then hands the image to presentation.

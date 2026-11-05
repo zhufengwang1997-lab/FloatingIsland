@@ -40,6 +40,23 @@ FetchContent_Declare(vma
   SYSTEM)
 FetchContent_MakeAvailable(vma)
 
+# Dear ImGui (debug UI) ships no CMake project; build the core plus the GLFW and Vulkan backends.
+FetchContent_Declare(imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG v1.92.9
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(imgui)
+add_library(imgui STATIC
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/imgui_demo.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+target_include_directories(imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
+
 # DXC compiles HLSL to SPIR-V. Looks in the Vulkan SDK first, then the local source build.
 find_program(DXC_EXECUTABLE dxc
   HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{HOME}/dev/deps/dxc-src/build/bin"
@@ -83,19 +100,21 @@ add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 add_executable(FloatingIsland
   src/main.cpp
   src/app/App.cpp
+  src/app/DebugUi.cpp
   src/rhi/VulkanContext.cpp
   src/rhi/Swapchain.cpp
   src/rhi/Resources.cpp
   src/rhi/Pipeline.cpp
   src/rhi/VmaImpl.cpp
   src/renderer/Renderer.cpp
+  src/renderer/GpuProfiler.cpp
   src/scene/Camera.cpp
   src/scene/IslandMesh.cpp
   src/scene/Primitives.cpp)
 
 add_dependencies(FloatingIsland shaders)
 target_include_directories(FloatingIsland PRIVATE src)
-target_link_libraries(FloatingIsland PRIVATE Vulkan::Vulkan glfw glm::glm GPUOpen::VulkanMemoryAllocator)
+target_link_libraries(FloatingIsland PRIVATE Vulkan::Vulkan glfw glm::glm GPUOpen::VulkanMemoryAllocator imgui)
 target_compile_definitions(FloatingIsland PRIVATE
   GLFW_INCLUDE_NONE
   GLM_FORCE_RADIANS

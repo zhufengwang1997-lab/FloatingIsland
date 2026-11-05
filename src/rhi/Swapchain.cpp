@@ -25,9 +25,32 @@ VkCompositeAlphaFlagBitsKHR chooseCompositeAlpha(VkCompositeAlphaFlagsKHR suppor
     return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 }
 
+VkPresentModeKHR choosePresentMode(const VulkanContext& ctx, bool vsync) {
+    if (vsync) return VK_PRESENT_MODE_FIFO_KHR;  // the only mode every device must support
+    uint32_t count = 0;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(ctx.physicalDevice, ctx.surface, &count, nullptr);
+    std::vector<VkPresentModeKHR> modes(count);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(ctx.physicalDevice, ctx.surface, &count, modes.data());
+    // MAILBOX: no tearing, newest frame wins. IMMEDIATE: may tear, but never waits.
+    for (VkPresentModeKHR wanted : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR}) {
+        if (std::find(modes.begin(), modes.end(), wanted) != modes.end()) return wanted;
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
 }  // namespace
 
-void Swapchain::create(const VulkanContext& ctx, VkExtent2D framebufferSize) {
+const char* presentModeName(VkPresentModeKHR mode) {
+    switch (mode) {
+        case VK_PRESENT_MODE_FIFO_KHR: return "FIFO (vsync)";
+        case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
+        case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
+        case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO_RELAXED";
+        default: return "other";
+    }
+}
+
+void Swapchain::create(const VulkanContext& ctx, VkExtent2D framebufferSize, bool vsync) {
     VkSurfaceCapabilitiesKHR caps;
     VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx.physicalDevice, ctx.surface, &caps));
 
@@ -62,7 +85,8 @@ void Swapchain::create(const VulkanContext& ctx, VkExtent2D framebufferSize) {
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.preTransform = caps.currentTransform;
     info.compositeAlpha = chooseCompositeAlpha(caps.supportedCompositeAlpha);
-    info.presentMode = VK_PRESENT_MODE_FIFO_KHR;  // vsync; the only mode every device must support
+    presentMode = choosePresentMode(ctx, vsync);
+    info.presentMode = presentMode;
     info.clipped = VK_TRUE;
     VK_CHECK(vkCreateSwapchainKHR(ctx.device, &info, nullptr, &handle));
     format = surfaceFormat.format;

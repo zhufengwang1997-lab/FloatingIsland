@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/DebugUi.h"
 #include "renderer/Renderer.h"
 #include "rhi/VulkanContext.h"
 #include "scene/Camera.h"
@@ -13,10 +14,10 @@ class App {
 public:
     // maxFrames > 0 quits after that many frames; 0 runs until the window is closed.
     // A non-empty screenshotPath saves the last of those frames there.
-    void run(int maxFrames = 0, const std::string& screenshotPath = {});
+    void run(int maxFrames = 0, const std::string& screenshotPath = {}, bool vsync = true);
 
 private:
-    void init();
+    void init(bool vsync);
     void loadScene();
     void mainLoop(int maxFrames, const std::string& screenshotPath);
     void shutdown();
@@ -25,4 +26,5 @@ private:
     VulkanContext ctx_;
     Renderer renderer_;
     Camera camera_;
+    DebugUi ui_;
 };

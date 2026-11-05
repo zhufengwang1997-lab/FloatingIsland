@@ -26,9 +26,12 @@ cmake -S . -B build -G Ninja      # 默认 Debug，开启验证层
 ninja -C build
 ./build/FloatingIsland            # Esc 退出
 ./build/FloatingIsland --frames 120 --screenshot shot.ppm   # 跑 120 帧，保存最后一帧后退出
+./build/FloatingIsland --frames 600 --no-vsync              # 关闭垂直同步跑 600 帧，退出时打印各 Pass 的 GPU 耗时
 ```
 
-操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速。
+操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速；F1 显示 / 隐藏调试面板。
+
+调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
 
 macOS 上用 Homebrew 安装的验证层时，需要让动态库加载器能找到它：
 
@@ -40,9 +43,9 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 
 | 目录 | 内容 |
 | --- | --- |
-| `src/app` | 窗口与主循环 |
+| `src/app` | 窗口与主循环、调试面板（`DebugUi`） |
 | `src/rhi` | Vulkan 底层封装：Instance / Device / 队列 / VMA（`VulkanContext`）、交换链（`Swapchain`）、Buffer 与 Image（`Resources`）、Pipeline 构建（`Pipeline`） |
-| `src/renderer` | 每帧的命令录制、同步与提交：阴影 Pass + 主 Pass（`Renderer`） |
+| `src/renderer` | 每帧的命令录制、同步与提交：阴影 Pass + 主 Pass + UI Pass（`Renderer`），GPU 时间戳计时（`GpuProfiler`） |
 | `src/scene` | 相机（`Camera`）、程序化生成的浮空岛网格（`IslandMesh`）、基础几何体（`Primitives`） |
 | `shaders` | HLSL Shader，构建时由 DXC 编译到 `build/shaders/*.spv`；`common.hlsli` 为共享的资源绑定定义 |
 
@@ -50,6 +53,9 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 
 1. **阴影 Pass**：从太阳方向用正交投影渲染场景深度到 2048² 阴影贴图（深度偏移防止自阴影）。
 2. **主 Pass**：GGX / Smith / Schlick 的金属度-粗糙度 PBR，3×3 PCF 阴影，半球环境光，ACES 色调映射，输出到 sRGB 交换链。
+3. **UI Pass**：在主 Pass 结果上叠加 ImGui（loadOp = LOAD）。
+
+每个 Pass 前后写入时间戳；每帧的查询结果在该帧的 Fence 触发后读回，不会让 CPU 等待 GPU。
 
 资源绑定：Set 0 = 每帧 Uniform Buffer（相机、光源矩阵）+ 阴影贴图（比较采样器）；Push Constant = 每个物体的模型矩阵。
 

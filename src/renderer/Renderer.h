@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/GpuProfiler.h"
 #include "rhi/Resources.h"
 #include "rhi/Swapchain.h"
 
@@ -21,9 +22,16 @@ struct GpuMesh {
     uint32_t indexCount = 0;
 };
 
-// Draws the scene in two passes per frame:
+// Counts from the last recorded frame, for the debug UI.
+struct FrameStats {
+    uint32_t drawCalls = 0;
+    uint64_t triangles = 0;
+};
+
+// Draws the scene in three passes per frame:
 //   1. shadow pass: scene depth from the sun into a shadow map
 //   2. main pass:   PBR shading into the swapchain image, sampling the shadow map
+//   3. UI pass:     Dear ImGui draw data on top (if ImGui::Render() was called this frame)
 // Up to kFramesInFlight frames are queued on the GPU at once.
 class Renderer {
 public:
@@ -33,13 +41,23 @@ public:
     // The sphere that must fit inside the shadow map.
     void setShadowBounds(glm::vec3 center, float radius);
     void drawFrame(const Camera& camera);
-    void onFramebufferResized() { framebufferResized_ = true; }
+    void onFramebufferResized() { swapchainDirty_ = true; }
+    // Takes effect at the end of the current frame (the swapchain is recreated).
+    void setVsync(bool enabled);
+    bool vsync() const { return vsync_; }
     // Saves the next frame as a binary PPM image (BGRA swapchains only).
     void requestCapture(const std::string& path) { capturePath_ = path; }
 
     glm::vec3 sunDirection = glm::normalize(glm::vec3(0.6f, 0.5f, 0.35f));
     glm::vec3 sunColor = glm::vec3(1.0f, 0.96f, 0.90f) * 3.5f;
     float exposure = 1.0f;
+    // Shadow pass depth bias (dynamic state, so it can be tuned live without new pipelines).
+    float shadowBiasConstant = 1.25f;
+    float shadowBiasSlope = 2.0f;
+
+    const GpuProfiler& profiler() const { return profiler_; }
+    const FrameStats& stats() const { return stats_; }
+    const Swapchain& swapchain() const { return swapchain_; }
 
 private:
     static constexpr uint32_t kFramesInFlight = 2;
@@ -80,9 +98,10 @@ private:
     void createPipelines();
     void recreateSwapchain();
     glm::mat4 lightViewProj() const;
-    void drawObjects(VkCommandBuffer cmd) const;
+    void drawObjects(VkCommandBuffer cmd);
     void recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set);
-    void recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set, bool capture);
+    void recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set);
+    void recordUiPass(VkCommandBuffer cmd, uint32_t imageIndex);
     void recordCapture(VkCommandBuffer cmd, VkImage image);
     void writeCapture(const std::string& path);
 
@@ -108,7 +127,11 @@ private:
     std::vector<RenderObject> objects_;
     glm::vec3 shadowCenter_{0.0f};
     float shadowRadius_ = 50.0f;
-    bool framebufferResized_ = false;
+    bool swapchainDirty_ = false;  // window resized or present mode changed
+    bool vsync_ = true;
+
+    GpuProfiler profiler_;
+    FrameStats stats_;
 
     std::string capturePath_;
     Buffer captureBuffer_;  // host-readable copy of one swapchain image

@@ -19,7 +19,28 @@
 
 ## 构建
 
-> 项目骨架搭建中，构建说明随第 2 步补充。
+依赖：CMake ≥ 3.25、Ninja、Vulkan 1.3 Loader + 验证层、DXC、GLFW 3.4+（找不到时自动下载）。
+
+```bash
+cmake -S . -B build -G Ninja      # 默认 Debug，开启验证层
+ninja -C build
+./build/FloatingIsland            # Esc 退出；--frames N 跑 N 帧后自动退出
+```
+
+macOS 上用 Homebrew 安装的验证层时，需要让动态库加载器能找到它：
+
+```bash
+export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
+```
+
+## 代码结构
+
+| 目录 | 内容 |
+| --- | --- |
+| `src/app` | 窗口与主循环 |
+| `src/rhi` | Vulkan 底层封装：Instance / Device / 队列（`VulkanContext`）、交换链（`Swapchain`） |
+| `src/renderer` | 每帧的命令录制、同步与提交（`Renderer`） |
+| `shaders` | HLSL Shader，构建时由 DXC 编译到 `build/shaders/*.spv` |
 
 ## 文档
 

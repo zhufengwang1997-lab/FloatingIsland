@@ -141,13 +141,17 @@ void DebugUi::drawSettings(Renderer& renderer) {
 
     ImGui::SeparatorText("Scene");
     ImGui::SliderFloat("Wind", &renderer.windStrength, 0.0f, 3.0f, "%.2f");
-    if (ImGui::BeginTable("objects", 3, ImGuiTableFlags_SizingStretchProp)) {
+    if (ImGui::BeginTable("objects", 4, ImGuiTableFlags_SizingStretchProp)) {
         for (uint32_t i = 0; i < renderer.objectCount(); ++i) {
             const std::string& name = renderer.objectName(i);
             if (name.empty()) continue;  // unnamed objects (test spheres) are not listed
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::Checkbox(name.c_str(), &renderer.objectVisible(i));
+            ImGui::TableNextColumn();
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::Checkbox("shadow", &renderer.objectCastsShadow(i));
+            ImGui::PopID();
             ImGui::TableNextColumn();
             ImGui::Text("x%u", renderer.objectInstances(i));
             ImGui::TableNextColumn();

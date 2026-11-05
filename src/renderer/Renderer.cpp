@@ -537,6 +537,7 @@ void Renderer::drawObjects(VkCommandBuffer cmd, bool shadowPass) {
     VkPipeline bound = VK_NULL_HANDLE;
     for (const RenderObject& o : objects_) {
         if (!o.visible) continue;
+        if (shadowPass && !o.castsShadow) continue;
         if (!shadowPass) {
             VkPipeline wanted = o.twoSided ? foliagePipeline_ : meshPipeline_;
             if (wanted != bound) {

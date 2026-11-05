@@ -153,7 +153,9 @@ MeshData makeGrassTuft() {
         const glm::vec3 n = glm::normalize(up + lean * 0.35f);
         const auto first = static_cast<uint32_t>(m.vertices.size());
         auto vertex = [&](glm::vec3 p, float t) {
-            m.vertices.push_back({p, n, glm::mix(root, tip, t), {0.8f, 0.0f}});
+            // t^2 keeps the lower half of each blade darker: a baked stand-in for the shade the
+            // neighbouring blades cast (grass is not drawn into the shadow map).
+            m.vertices.push_back({p, n, glm::mix(root, tip, t * t), {0.8f, 0.0f}});
         };
         vertex(base - across * width, 0.0f);
         vertex(base + across * width, 0.0f);
@@ -196,7 +198,7 @@ std::vector<VegetationKind> generateVegetation(const IslandParams& island, uint3
     VegetationKind pines{"Pine trees", makePine(), {}, false};
     VegetationKind broadleaves{"Broadleaf trees", makeBroadleaf(), {}, false};
     VegetationKind rocks{"Rocks", makeRock(), {}, false};
-    VegetationKind grass{"Grass", makeGrassTuft(), {}, true};
+    VegetationKind grass{"Grass", makeGrassTuft(), {}, true, false};
     const float twoPi = glm::two_pi<float>();
 
     // Trees: in forest patches (low-frequency noise), on gentle green slopes away from the beach.

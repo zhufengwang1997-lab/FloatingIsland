@@ -76,6 +76,7 @@ public:
     uint32_t objectInstances(uint32_t i) const { return objects_[i].instanceCount; }
     uint32_t objectTriangles(uint32_t i) const { return objects_[i].mesh.indexCount / 3 * objects_[i].instanceCount; }
     bool& objectVisible(uint32_t i) { return objects_[i].visible; }
+    bool& objectCastsShadow(uint32_t i) { return objects_[i].castsShadow; }
 
     const GpuProfiler& profiler() const { return profiler_; }
     const FrameStats& stats() const { return stats_; }
@@ -116,6 +117,7 @@ private:
         bool ownsInstances = false;
         bool twoSided = false;
         bool visible = true;
+        bool castsShadow = true;  // drawn into the shadow map
         std::string name;
     };
 

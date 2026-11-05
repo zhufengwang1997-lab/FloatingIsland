@@ -18,6 +18,7 @@ struct AppOptions {
     std::string benchmarkCsv;    // optional per-frame GPU timings of the benchmark
     float grassDensity = 1.0f;   // multiplies the number of grass tufts
     int sceneRepeat = 16;        // benchmark: draw the scene passes this many times per frame
+    bool grassShadows = false;   // draw grass into the shadow map (off by default; on for A/B tests)
 };
 
 // Owns the window and the main loop.
@@ -26,8 +27,8 @@ public:
     void run(const AppOptions& options);
 
 private:
-    void init(bool vsync, float grassDensity);
-    void loadScene(float grassDensity);
+    void init(bool vsync, const AppOptions& options);
+    void loadScene(const AppOptions& options);
     void mainLoop(int maxFrames, const std::string& screenshotPath, Benchmark* benchmark);
     void shutdown();
 

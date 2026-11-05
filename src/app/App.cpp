@@ -18,19 +18,19 @@ void App::run(const AppOptions& options) {
     if (options.benchmarkFrames > 0) {
         // Uncapped frame rate and no UI, so the numbers measure the scene.
         Benchmark benchmark(options.benchmarkFrames, options.sceneRepeat, options.benchmarkCsv);
-        init(false, options.grassDensity);
+        init(false, options);
         renderer_.sceneRepeat = static_cast<uint32_t>(std::max(options.sceneRepeat, 1));
         ui_.visible = false;
         mainLoop(benchmark.totalFrames(), options.screenshotPath, &benchmark);
         benchmark.report();
     } else {
-        init(options.vsync, options.grassDensity);
+        init(options.vsync, options);
         mainLoop(options.maxFrames, options.screenshotPath, nullptr);
     }
     shutdown();
 }
 
-void App::init(bool vsync, float grassDensity) {
+void App::init(bool vsync, const AppOptions& options) {
     // Hand GLFW the loader we link against, instead of letting it search for libvulkan itself.
     glfwInitVulkanLoader(vkGetInstanceProcAddr);
     if (!glfwInit()) throw std::runtime_error("glfwInit failed");
@@ -59,19 +59,21 @@ void App::init(bool vsync, float grassDensity) {
     std::printf("Present mode: %s\n", presentModeName(renderer_.swapchain().presentMode));
     ui_.init(window_, ctx_, renderer_);
     ui_.setVsync(vsync);  // after our callbacks, which ImGui chains to
-    loadScene(grassDensity);
+    loadScene(options);
 }
 
-void App::loadScene(float grassDensity) {
+void App::loadScene(const AppOptions& options) {
     const MeshData island = generateIsland();
     std::printf("Island: %zu vertices, %zu triangles\n", island.vertices.size(), island.indices.size() / 3);
     renderer_.addObject(island, glm::mat4(1.0f), "Island");
 
     // Vegetation: one instanced draw call per kind.
-    for (const VegetationKind& kind : generateVegetation({}, 11, grassDensity)) {
-        std::printf("%s: %zu instances x %zu triangles\n", kind.name.c_str(), kind.instances.size(),
-                    kind.mesh.indices.size() / 3);
-        renderer_.addInstanced(kind.mesh, kind.instances, kind.twoSided, kind.name);
+    for (const VegetationKind& kind : generateVegetation({}, 11, options.grassDensity)) {
+        const bool castsShadow = kind.castsShadow || options.grassShadows;
+        std::printf("%s: %zu instances x %zu triangles%s\n", kind.name.c_str(), kind.instances.size(),
+                    kind.mesh.indices.size() / 3, castsShadow ? "" : " (no shadow)");
+        const uint32_t index = renderer_.addInstanced(kind.mesh, kind.instances, kind.twoSided, kind.name);
+        renderer_.objectCastsShadow(index) = castsShadow;
     }
 
     // Material test spheres floating above the island: roughness 0.1 -> 0.9 from left to right,

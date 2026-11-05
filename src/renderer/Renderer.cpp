@@ -75,6 +75,9 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
     createDescriptors();
     createPipelines();
     profiler_.init(ctx);
+    const InstanceData identity{};
+    identityInstance_ = uploadBuffer(ctx, &identity, sizeof(identity), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    startTime_ = glfwGetTime();
 }
 
 void Renderer::shutdown() {
@@ -83,10 +86,13 @@ void Renderer::shutdown() {
     for (RenderObject& o : objects_) {
         destroyBuffer(ctx_->allocator, o.mesh.vertices);
         destroyBuffer(ctx_->allocator, o.mesh.indices);
+        if (o.ownsInstances) destroyBuffer(ctx_->allocator, o.instances);
     }
     objects_.clear();
+    destroyBuffer(ctx_->allocator, identityInstance_);
     destroyBuffer(ctx_->allocator, captureBuffer_);
     vkDestroyPipeline(device, meshPipeline_, nullptr);
+    vkDestroyPipeline(device, foliagePipeline_, nullptr);
     vkDestroyPipeline(device, shadowPipeline_, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
     vkDestroyDescriptorPool(device, descriptorPool_, nullptr);  // also frees the sets
@@ -105,7 +111,7 @@ void Renderer::shutdown() {
     swapchain_.destroy(device);
 }
 
-void Renderer::addObject(const MeshData& mesh, const glm::mat4& model) {
+uint32_t Renderer::addObject(const MeshData& mesh, const glm::mat4& model, std::string name) {
     RenderObject o;
     o.mesh.vertices = uploadBuffer(*ctx_, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -113,7 +119,23 @@ void Renderer::addObject(const MeshData& mesh, const glm::mat4& model) {
                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     o.mesh.indexCount = static_cast<uint32_t>(mesh.indices.size());
     o.model = model;
-    objects_.push_back(o);
+    o.instances = identityInstance_;
+    o.name = std::move(name);
+    objects_.push_back(std::move(o));
+    return static_cast<uint32_t>(objects_.size() - 1);
+}
+
+uint32_t Renderer::addInstanced(const MeshData& mesh, const std::vector<InstanceData>& instances, bool twoSided,
+                                std::string name) {
+    if (instances.empty()) throw std::runtime_error("addInstanced: no instances for " + name);
+    const uint32_t index = addObject(mesh, glm::mat4(1.0f), std::move(name));
+    RenderObject& o = objects_[index];
+    o.instances = uploadBuffer(*ctx_, instances.data(), instances.size() * sizeof(InstanceData),
+                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    o.instanceCount = static_cast<uint32_t>(instances.size());
+    o.ownsInstances = true;
+    o.twoSided = twoSided;
+    return index;
 }
 
 void Renderer::setShadowBounds(glm::vec3 center, float radius) {
@@ -254,24 +276,35 @@ void Renderer::createPipelines() {
     layoutInfo.pPushConstantRanges = &pushRange;
     VK_CHECK(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout_));
 
-    const VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    // Binding 0: mesh vertices. Binding 1: per-instance data, advanced once per instance.
+    const std::vector<VkVertexInputBindingDescription> bindings{
+        {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
+        {1, sizeof(InstanceData), VK_VERTEX_INPUT_RATE_INSTANCE},
+    };
+    const VkVertexInputAttributeDescription instancePosition{4, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                                             offsetof(InstanceData, positionScale)};
+    const VkVertexInputAttributeDescription instanceParams{5, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                                           offsetof(InstanceData, params)};
 
     VkShaderModule meshVs = loadShaderModule(device, FI_SHADER_DIR "/mesh.vs.spv");
     VkShaderModule meshPs = loadShaderModule(device, FI_SHADER_DIR "/mesh.ps.spv");
-    meshPipeline_ = GraphicsPipelineBuilder()
-                        .stage(VK_SHADER_STAGE_VERTEX_BIT, meshVs, "VSMain")
-                        .stage(VK_SHADER_STAGE_FRAGMENT_BIT, meshPs, "PSMain")
-                        .vertexInput({binding},
-                                     {
-                                         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-                                         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
-                                         {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
-                                         {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, material)},
-                                     })
-                        .colorFormat(swapchain_.format)
-                        .depthFormat(kDepthFormat)
-                        .layout(pipelineLayout_)
-                        .build(device);
+    GraphicsPipelineBuilder mesh;
+    mesh.stage(VK_SHADER_STAGE_VERTEX_BIT, meshVs, "VSMain")
+        .stage(VK_SHADER_STAGE_FRAGMENT_BIT, meshPs, "PSMain")
+        .vertexInput(bindings,
+                     {
+                         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+                         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
+                         {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
+                         {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, material)},
+                         instancePosition,
+                         instanceParams,
+                     })
+        .colorFormat(swapchain_.format)
+        .depthFormat(kDepthFormat)
+        .layout(pipelineLayout_);
+    meshPipeline_ = mesh.build(device);
+    foliagePipeline_ = mesh.cull(VK_CULL_MODE_NONE).build(device);
     vkDestroyShaderModule(device, meshVs, nullptr);
     vkDestroyShaderModule(device, meshPs, nullptr);
 
@@ -281,7 +314,9 @@ void Renderer::createPipelines() {
     VkShaderModule shadowVs = loadShaderModule(device, FI_SHADER_DIR "/shadow.vs.spv");
     shadowPipeline_ = GraphicsPipelineBuilder()
                           .stage(VK_SHADER_STAGE_VERTEX_BIT, shadowVs, "VSMain")
-                          .vertexInput({binding}, {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)}})
+                          .vertexInput(bindings, {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+                                                  instancePosition,
+                                                  instanceParams})
                           .cull(VK_CULL_MODE_NONE)
                           .depthBias(0.0f, 0.0f)  // enabled; the factors are set per frame
                           .dynamicState(VK_DYNAMIC_STATE_DEPTH_BIAS)
@@ -362,7 +397,8 @@ void Renderer::drawFrame(const Camera& camera) {
     uniforms.cameraPosition = glm::vec4(camera.position, 1.0f);
     uniforms.sunDirection = glm::vec4(glm::normalize(sunDirection), 0.0f);
     uniforms.sunColor = glm::vec4(sunColor, 0.0f);
-    uniforms.params = glm::vec4(exposure, 1.0f / static_cast<float>(kShadowMapSize), 0.0f, 0.0f);
+    uniforms.params = glm::vec4(exposure, 1.0f / static_cast<float>(kShadowMapSize),
+                                static_cast<float>(glfwGetTime() - startTime_), windStrength);
     std::memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
     VK_CHECK(vmaFlushAllocation(ctx_->allocator, frame.uniforms.allocation, 0, sizeof(uniforms)));
 
@@ -446,15 +482,25 @@ void Renderer::drawFrame(const Camera& camera) {
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 }
 
-void Renderer::drawObjects(VkCommandBuffer cmd) {
+void Renderer::drawObjects(VkCommandBuffer cmd, bool shadowPass) {
+    VkPipeline bound = VK_NULL_HANDLE;
     for (const RenderObject& o : objects_) {
+        if (!o.visible) continue;
+        if (!shadowPass) {
+            VkPipeline wanted = o.twoSided ? foliagePipeline_ : meshPipeline_;
+            if (wanted != bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wanted);
+                bound = wanted;
+            }
+        }
         ++stats_.drawCalls;
-        stats_.triangles += o.mesh.indexCount / 3;
+        stats_.triangles += static_cast<uint64_t>(o.mesh.indexCount / 3) * o.instanceCount;
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &o.model);
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &o.mesh.vertices.buffer, &offset);
+        const VkBuffer buffers[] = {o.mesh.vertices.buffer, o.instances.buffer};
+        const VkDeviceSize offsets[] = {0, 0};
+        vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
         vkCmdBindIndexBuffer(cmd, o.mesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, o.mesh.indexCount, 1, 0, 0, 0);
+        vkCmdDrawIndexed(cmd, o.mesh.indexCount, o.instanceCount, 0, 0, 0);
     }
 }
 
@@ -481,7 +527,7 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
     setViewportAndScissor(cmd, shadowMap_.extent);
     vkCmdSetDepthBias(cmd, shadowBiasConstant, 0.0f, shadowBiasSlope);
-    drawObjects(cmd);
+    drawObjects(cmd, true);
     vkCmdEndRendering(cmd);
 
     // Depth writes must finish before the main pass samples the map.
@@ -524,10 +570,9 @@ void Renderer::recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescri
     rendering.pColorAttachments = &color;
     rendering.pDepthAttachment = &depth;
     vkCmdBeginRendering(cmd, &rendering);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
     setViewportAndScissor(cmd, swapchain_.extent);
-    drawObjects(cmd);
+    drawObjects(cmd, false);  // binds the mesh / foliage pipeline per object
     vkCmdEndRendering(cmd);
 }
 

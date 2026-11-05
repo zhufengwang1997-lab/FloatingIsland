@@ -13,6 +13,13 @@ struct Vertex {
     glm::vec2 material;  // x: roughness, y: metallic
 };
 
+// Per-instance data for instanced draws (vertex binding 1, input rate instance).
+// Matches InstanceInput in shaders/common.hlsli.
+struct InstanceData {
+    glm::vec4 positionScale{0.0f, 0.0f, 0.0f, 1.0f};  // xyz: position in object space, w: uniform scale
+    glm::vec4 params{0.0f, 1.0f, 0.0f, 0.0f};         // x: yaw (radians), y: color tint, z: wind sway, w: unused
+};
+
 struct MeshData {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;  // counter-clockwise front faces

@@ -46,16 +46,20 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 | `src/app` | 窗口与主循环、调试面板（`DebugUi`） |
 | `src/rhi` | Vulkan 底层封装：Instance / Device / 队列 / VMA（`VulkanContext`）、交换链（`Swapchain`）、Buffer 与 Image（`Resources`）、Pipeline 构建（`Pipeline`） |
 | `src/renderer` | 每帧的命令录制、同步与提交：阴影 Pass + 主 Pass + UI Pass（`Renderer`），GPU 时间戳计时（`GpuProfiler`） |
-| `src/scene` | 相机（`Camera`）、程序化生成的浮空岛网格（`IslandMesh`）、基础几何体（`Primitives`） |
+| `src/scene` | 相机（`Camera`）、程序化生成的浮空岛网格（`IslandMesh`）、基础几何体（`Primitives`）、按地形散布的植被与岩石（`Vegetation`） |
 | `shaders` | HLSL Shader，构建时由 DXC 编译到 `build/shaders/*.spv`；`common.hlsli` 为共享的资源绑定定义 |
 
 ## 渲染流程（每帧）
+
+场景：程序化浮空岛 + 低多边形松树、阔叶树、岩石与约 1.5 万丛草。每种植被一次实例化绘制（Instance Buffer 存位置 / 缩放 / 朝向 / 色调 / 风力），顶点着色器里做风吹摆动，阴影 Pass 用同一函数，所以影子跟着摆。
 
 1. **阴影 Pass**：从太阳方向用正交投影渲染场景深度到 2048² 阴影贴图（深度偏移防止自阴影）。
 2. **主 Pass**：GGX / Smith / Schlick 的金属度-粗糙度 PBR，3×3 PCF 阴影，半球环境光，ACES 色调映射，输出到 sRGB 交换链。
 3. **UI Pass**：在主 Pass 结果上叠加 ImGui（loadOp = LOAD）。
 
 每个 Pass 前后写入时间戳；每帧的查询结果在该帧的 Fence 触发后读回，不会让 CPU 等待 GPU。
+
+已知问题：在 MoltenVK 上关闭垂直同步时，主 Pass 的 GPU 计时会包含等待交换链图像被显示器释放的时间（读数偏大）。下一步改为先渲染到离屏 HDR 纹理、最后再合成到交换链来解决。
 
 资源绑定：Set 0 = 每帧 Uniform Buffer（相机、光源矩阵）+ 阴影贴图（比较采样器）；Push Constant = 每个物体的模型矩阵。
 

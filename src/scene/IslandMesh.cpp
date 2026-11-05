@@ -167,6 +167,26 @@ void computeNormals(MeshData& mesh) {
 
 }  // namespace
 
+float islandNoise(float x, float z, uint32_t seed) {
+    return fbm(x, z, seed, 4);
+}
+
+IslandSurface sampleIslandSurface(float x, float z, const IslandParams& p) {
+    IslandSurface s;
+    s.coast = coastDistance(x, z, p);
+    s.land = s.coast < 1.0f;
+    if (!s.land) return s;
+    s.height = topHeight(x, z, s.coast, p);
+    // Normal from central differences of the height field.
+    const float e = 0.25f;
+    const float dx = topHeight(x + e, z, coastDistance(x + e, z, p), p) - topHeight(x - e, z, coastDistance(x - e, z, p), p);
+    const float dz = topHeight(x, z + e, coastDistance(x, z + e, p), p) - topHeight(x, z - e, coastDistance(x, z - e, p), p);
+    s.normal = glm::normalize(glm::vec3(-dx, 2.0f * e, -dz));
+    s.rockiness = glm::smoothstep(0.65f, 0.85f, s.height / p.maxHeight);
+    s.sand = glm::smoothstep(0.85f, 0.97f, s.coast);
+    return s;
+}
+
 MeshData generateIsland(const IslandParams& params) {
     MeshData mesh;
     addLayer(mesh, params, true);

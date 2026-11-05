@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace {
 
@@ -133,6 +134,23 @@ void DebugUi::drawSettings(Renderer& renderer) {
     ImGui::SliderFloat("Azimuth", &sunAzimuthDeg_, -180.0f, 180.0f, "%.0f deg");
     ImGui::SliderFloat("Elevation", &sunElevationDeg_, 2.0f, 90.0f, "%.0f deg");
     ImGui::SliderFloat("Intensity", &sunIntensity_, 0.0f, 10.0f, "%.2f");
+
+    ImGui::SeparatorText("Scene");
+    ImGui::SliderFloat("Wind", &renderer.windStrength, 0.0f, 3.0f, "%.2f");
+    if (ImGui::BeginTable("objects", 3, ImGuiTableFlags_SizingStretchProp)) {
+        for (uint32_t i = 0; i < renderer.objectCount(); ++i) {
+            const std::string& name = renderer.objectName(i);
+            if (name.empty()) continue;  // unnamed objects (test spheres) are not listed
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Checkbox(name.c_str(), &renderer.objectVisible(i));
+            ImGui::TableNextColumn();
+            ImGui::Text("x%u", renderer.objectInstances(i));
+            ImGui::TableNextColumn();
+            ImGui::Text("%.1fk tris", static_cast<double>(renderer.objectTriangles(i)) / 1e3);
+        }
+        ImGui::EndTable();
+    }
 
     ImGui::SeparatorText("Camera");
     ImGui::SliderFloat("Exposure", &renderer.exposure, 0.1f, 4.0f, "%.2f");

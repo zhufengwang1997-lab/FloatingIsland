@@ -110,7 +110,8 @@ add_executable(FloatingIsland
   src/renderer/GpuProfiler.cpp
   src/scene/Camera.cpp
   src/scene/IslandMesh.cpp
-  src/scene/Primitives.cpp)
+  src/scene/Primitives.cpp
+  src/scene/Vegetation.cpp)
 
 add_dependencies(FloatingIsland shaders)
 target_include_directories(FloatingIsland PRIVATE src)

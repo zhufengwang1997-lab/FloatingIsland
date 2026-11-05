@@ -14,6 +14,7 @@
 class Camera;
 class VulkanContext;
 struct GLFWwindow;
+struct InstanceData;
 struct MeshData;
 
 struct GpuMesh {
@@ -37,7 +38,12 @@ class Renderer {
 public:
     void init(VulkanContext& ctx, GLFWwindow* window);
     void shutdown();
-    void addObject(const MeshData& mesh, const glm::mat4& model = glm::mat4(1.0f));
+    // Adds a mesh drawn once. Returns its object index.
+    uint32_t addObject(const MeshData& mesh, const glm::mat4& model = glm::mat4(1.0f), std::string name = {});
+    // Adds a mesh drawn once per instance in a single instanced draw call. twoSided disables back-face
+    // culling (thin geometry such as grass blades). Returns its object index.
+    uint32_t addInstanced(const MeshData& mesh, const std::vector<InstanceData>& instances, bool twoSided,
+                          std::string name);
     // The sphere that must fit inside the shadow map.
     void setShadowBounds(glm::vec3 center, float radius);
     void drawFrame(const Camera& camera);
@@ -54,6 +60,14 @@ public:
     // Shadow pass depth bias (dynamic state, so it can be tuned live without new pipelines).
     float shadowBiasConstant = 1.25f;
     float shadowBiasSlope = 2.0f;
+    float windStrength = 1.0f;
+
+    // Objects, for the debug UI.
+    uint32_t objectCount() const { return static_cast<uint32_t>(objects_.size()); }
+    const std::string& objectName(uint32_t i) const { return objects_[i].name; }
+    uint32_t objectInstances(uint32_t i) const { return objects_[i].instanceCount; }
+    uint32_t objectTriangles(uint32_t i) const { return objects_[i].mesh.indexCount / 3 * objects_[i].instanceCount; }
+    bool& objectVisible(uint32_t i) { return objects_[i].visible; }
 
     const GpuProfiler& profiler() const { return profiler_; }
     const FrameStats& stats() const { return stats_; }
@@ -86,7 +100,13 @@ private:
 
     struct RenderObject {
         GpuMesh mesh;
-        glm::mat4 model;
+        glm::mat4 model{1.0f};
+        Buffer instances;  // InstanceData; identityInstance_ when drawn once
+        uint32_t instanceCount = 1;
+        bool ownsInstances = false;
+        bool twoSided = false;
+        bool visible = true;
+        std::string name;
     };
 
     void createFrameResources();
@@ -98,7 +118,8 @@ private:
     void createPipelines();
     void recreateSwapchain();
     glm::mat4 lightViewProj() const;
-    void drawObjects(VkCommandBuffer cmd);
+    // shadowPass: the caller has bound the shadow pipeline; otherwise pick mesh / foliage per object.
+    void drawObjects(VkCommandBuffer cmd, bool shadowPass);
     void recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set);
     void recordMainPass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set);
     void recordUiPass(VkCommandBuffer cmd, uint32_t imageIndex);
@@ -122,9 +143,12 @@ private:
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;  // shared by both pipelines
     VkPipeline meshPipeline_ = VK_NULL_HANDLE;
+    VkPipeline foliagePipeline_ = VK_NULL_HANDLE;  // mesh shading without back-face culling
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
 
     std::vector<RenderObject> objects_;
+    Buffer identityInstance_;  // one default InstanceData, shared by every non-instanced object
+    double startTime_ = 0.0;
     glm::vec3 shadowCenter_{0.0f};
     float shadowRadius_ = 50.0f;
     bool swapchainDirty_ = false;  // window resized or present mode changed

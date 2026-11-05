@@ -10,7 +10,7 @@ struct FrameData
     float4 cameraPosition;    // xyz
     float4 sunDirection;      // xyz: unit vector towards the sun
     float4 sunColor;          // rgb: color * intensity
-    float4 params;            // x: exposure, y: 1 / shadow map size
+    float4 params;            // x: exposure, y: 1 / shadow map size, z: time (s), w: wind strength
 };
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
@@ -21,5 +21,42 @@ struct ObjectData
     float4x4 model;
 };
 [[vk::push_constant]] ObjectData object;
+
+// Per-instance data (vertex binding 1). Matches InstanceData in src/scene/Mesh.h.
+// Objects drawn once use a single identity instance.
+struct InstanceInput
+{
+    [[vk::location(4)]] float4 positionScale : INSTANCE_POSITION;  // xyz: offset, w: uniform scale
+    [[vk::location(5)]] float4 params : INSTANCE_PARAMS;           // x: yaw, y: tint, z: wind sway
+};
+
+float3 RotateYaw(float3 v, float yaw)
+{
+    float s, c;
+    sincos(yaw, s, c);
+    return float3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+}
+
+// Instance space -> world space, including wind sway. The shadow pass uses the same function,
+// so shadows move with the foliage.
+float3 InstanceToWorld(float3 localPos, InstanceInput inst)
+{
+    float3 p = RotateYaw(localPos, inst.params.x) * inst.positionScale.w + inst.positionScale.xyz;
+    float3 world = mul(object.model, float4(p, 1.0)).xyz;
+
+    // Sway grows with the square of the height above the instance origin, so the base stays put.
+    // Two sine waves with a phase that travels across the island read as gusts.
+    float sway = inst.params.z * frame.params.w * localPos.y * localPos.y * inst.positionScale.w;
+    float phase = dot(world.xz, float2(0.13, 0.09));
+    float t = frame.params.z;
+    float gust = 0.6 * sin(t * 1.3 + phase) + 0.3 * sin(t * 2.9 + phase * 2.1) + 0.4;
+    world.xz += float2(0.8, 0.6) * sway * gust;
+    return world;
+}
+
+float3 InstanceNormalToWorld(float3 n, InstanceInput inst)
+{
+    return mul((float3x3)object.model, RotateYaw(n, inst.params.x));  // uniform scale only
+}
 
 #endif

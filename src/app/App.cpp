@@ -2,6 +2,7 @@
 
 #include "scene/IslandMesh.h"
 #include "scene/Primitives.h"
+#include "scene/Vegetation.h"
 
 #include <vulkan/vulkan.h>
 
@@ -53,7 +54,14 @@ void App::init(bool vsync) {
 void App::loadScene() {
     const MeshData island = generateIsland();
     std::printf("Island: %zu vertices, %zu triangles\n", island.vertices.size(), island.indices.size() / 3);
-    renderer_.addObject(island);
+    renderer_.addObject(island, glm::mat4(1.0f), "Island");
+
+    // Vegetation: one instanced draw call per kind.
+    for (const VegetationKind& kind : generateVegetation()) {
+        std::printf("%s: %zu instances x %zu triangles\n", kind.name.c_str(), kind.instances.size(),
+                    kind.mesh.indices.size() / 3);
+        renderer_.addInstanced(kind.mesh, kind.instances, kind.twoSided, kind.name);
+    }
 
     // Material test spheres floating above the island: roughness 0.1 -> 0.9 from left to right,
     // red plastic on the lower row, gold on the upper row.
@@ -78,6 +86,9 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
     double lastFrame = lastTitleUpdate;
     int frames = 0;
     int totalFrames = 0;
+    // CPU frame time averaged after a warm-up, for automated runs.
+    constexpr int kWarmupFrames = 60;
+    double measureStart = 0.0;
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
         const double frameStart = glfwGetTime();
@@ -87,7 +98,8 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
         ui_.build(renderer_, camera_, dt * 1000.0f);
         if (!screenshotPath.empty() && totalFrames + 1 == maxFrames) renderer_.requestCapture(screenshotPath);
         renderer_.drawFrame(camera_);
-        if (maxFrames > 0 && ++totalFrames >= maxFrames) break;
+        if (++totalFrames == kWarmupFrames) measureStart = glfwGetTime();
+        if (maxFrames > 0 && totalFrames >= maxFrames) break;
 
         // Average frame time in the title bar, refreshed twice a second.
         ++frames;
@@ -104,6 +116,10 @@ void App::mainLoop(int maxFrames, const std::string& screenshotPath) {
     }
 
     // Averages for automated runs (--frames), so measurements can be compared between commits.
+    if (maxFrames > kWarmupFrames) {
+        const double ms = 1000.0 * (glfwGetTime() - measureStart) / (totalFrames - kWarmupFrames);
+        std::printf("CPU frame (avg after warm-up): %.2f ms (%.0f fps)\n", ms, 1000.0 / ms);
+    }
     const GpuProfiler& gpu = renderer_.profiler();
     if (maxFrames > 0 && gpu.supported()) {
         std::printf("GPU ms (smoothed): frame %.3f | shadow %.3f | main %.3f | ui %.3f\n",

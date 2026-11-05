@@ -24,14 +24,14 @@ struct VSOutput
     [[vk::location(3)]] float2 material : MATERIAL;
 };
 
-VSOutput VSMain(VSInput input)
+VSOutput VSMain(VSInput input, InstanceInput inst)
 {
-    float4 world = mul(object.model, float4(input.position, 1.0));
+    float3 world = InstanceToWorld(input.position, inst);
     VSOutput output;
-    output.position = mul(frame.viewProj, world);
-    output.worldPos = world.xyz;
-    output.normal = mul((float3x3)object.model, input.normal);  // fine while models use uniform scale
-    output.color = input.color;
+    output.position = mul(frame.viewProj, float4(world, 1.0));
+    output.worldPos = world;
+    output.normal = InstanceNormalToWorld(input.normal, inst);
+    output.color = input.color * inst.params.y;
     output.material = input.material;
     return output;
 }

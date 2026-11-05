@@ -112,6 +112,7 @@ add_executable(FloatingIsland
   src/renderer/Renderer.cpp
   src/renderer/GpuProfiler.cpp
   src/scene/Camera.cpp
+  src/scene/Culling.cpp
   src/scene/IslandMesh.cpp
   src/scene/Primitives.cpp
   src/scene/Vegetation.cpp)

@@ -18,6 +18,7 @@ struct AppOptions {
     std::string benchmarkCsv;    // optional per-frame GPU timings of the benchmark
     float grassDensity = 1.0f;   // multiplies the number of grass tufts
     int sceneRepeat = 16;        // benchmark: draw the scene passes this many times per frame
+    bool frustumCulling = true;  // skip chunks outside the camera view (off for A/B tests)
     bool grassShadows = false;   // draw grass into the shadow map (off by default; on for A/B tests)
 };
 

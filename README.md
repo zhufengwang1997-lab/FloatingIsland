@@ -36,11 +36,12 @@ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 ninja -C build-release
 ./build-release/FloatingIsland --benchmark 1500 --csv out.csv   # 每帧场景画 16 遍让 GPU 满载，报告单遍耗时
 ./build-release/FloatingIsland --benchmark 1500 --grass-density 4 --grass-shadows   # 加重草的负载；让草也写入阴影贴图（用于前后对比）
+./build-release/FloatingIsland --benchmark 1500 --grass-density 4 --no-culling     # 关闭视锥剔除（用于前后对比）
 ```
 
 操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速；F1 显示 / 隐藏调试面板。
 
-调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；物体列表里可以单独开关每类物体的显示和阴影（草默认不投射阴影）；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
+调试面板（Dear ImGui）：CPU 帧时间与各 Pass 的 GPU 耗时（时间戳查询）、帧时间曲线、Draw Call 与三角形数；视锥剔除开关和 Freeze（冻结剔除用的视锥，飞出去就能看到哪些区块没画）；物体列表里可以单独开关每类物体的显示和阴影（草默认不投射阴影）；可实时调节太阳方位角 / 高度角 / 强度、曝光、阴影深度偏移，以及开关垂直同步。
 
 macOS 上用 Homebrew 安装的验证层时，需要让动态库加载器能找到它：
 

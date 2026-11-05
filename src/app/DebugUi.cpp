@@ -126,6 +126,7 @@ void DebugUi::drawStats(const Renderer& renderer, const Camera& camera) {
     const FrameStats& stats = renderer.stats();
     const Swapchain& sc = renderer.swapchain();
     ImGui::Text("Draw calls  %u   Triangles %.2f M  (all passes)", stats.drawCalls, static_cast<double>(stats.triangles) / 1e6);
+    ImGui::Text("Chunks      %u / %u in view  (main pass)", stats.chunksVisible, stats.chunksTotal);
     ImGui::Text("Swapchain   %ux%u, %zu images, %s", sc.extent.width, sc.extent.height, sc.images.size(),
                 presentModeName(sc.presentMode));
     ImGui::Text("Camera      (%.1f, %.1f, %.1f)", camera.position.x, camera.position.y, camera.position.z);
@@ -141,6 +142,9 @@ void DebugUi::drawSettings(Renderer& renderer) {
 
     ImGui::SeparatorText("Scene");
     ImGui::SliderFloat("Wind", &renderer.windStrength, 0.0f, 3.0f, "%.2f");
+    ImGui::Checkbox("Frustum culling", &renderer.frustumCulling);
+    ImGui::SameLine();
+    ImGui::Checkbox("Freeze", &renderer.freezeCulling);
     if (ImGui::BeginTable("objects", 4, ImGuiTableFlags_SizingStretchProp)) {
         for (uint32_t i = 0; i < renderer.objectCount(); ++i) {
             const std::string& name = renderer.objectName(i);

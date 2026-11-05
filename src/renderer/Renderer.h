@@ -3,6 +3,7 @@
 #include "renderer/GpuProfiler.h"
 #include "rhi/Resources.h"
 #include "rhi/Swapchain.h"
+#include "scene/Culling.h"
 
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
@@ -27,6 +28,8 @@ struct GpuMesh {
 struct FrameStats {
     uint32_t drawCalls = 0;
     uint64_t triangles = 0;
+    uint32_t chunksVisible = 0;  // main pass, after frustum culling
+    uint32_t chunksTotal = 0;
 };
 
 // Draws the scene in four passes per frame:
@@ -43,10 +46,11 @@ public:
     void shutdown();
     // Adds a mesh drawn once. Returns its object index.
     uint32_t addObject(const MeshData& mesh, const glm::mat4& model = glm::mat4(1.0f), std::string name = {});
-    // Adds a mesh drawn once per instance in a single instanced draw call. twoSided disables back-face
-    // culling (thin geometry such as grass blades). Returns its object index.
+    // Adds a mesh drawn once per instance. twoSided disables back-face culling (thin geometry such as
+    // grass blades). The instances are grouped into square chunks of chunkSize world units; the main
+    // pass draws only the chunks inside the camera frustum. Returns its object index.
     uint32_t addInstanced(const MeshData& mesh, const std::vector<InstanceData>& instances, bool twoSided,
-                          std::string name);
+                          std::string name, float chunkSize = 8.0f);
     // The sphere that must fit inside the shadow map.
     void setShadowBounds(glm::vec3 center, float radius);
     void drawFrame(const Camera& camera);
@@ -69,6 +73,11 @@ public:
     // Benchmarks: record the shadow and main passes this many times per frame, so the GPU stays fully
     // busy (and at a steady clock). The output is the same; timings are totals over all repeats.
     uint32_t sceneRepeat = 1;
+    // Skip chunks outside the camera frustum in the main pass.
+    bool frustumCulling = true;
+    // Debug: keep culling against the frustum of the moment this was switched on, so you can fly
+    // out and look at what is (not) being drawn.
+    bool freezeCulling = false;
 
     // Objects, for the debug UI.
     uint32_t objectCount() const { return static_cast<uint32_t>(objects_.size()); }
@@ -109,6 +118,18 @@ private:
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
     };
 
+    // A group of instances that are close together, tested against the frustum as one box.
+    struct InstanceChunk {
+        Aabb bounds;              // without wind sway
+        float swayReach = 0.0f;   // how far wind can move the geometry sideways, per unit of windStrength
+        uint32_t firstInstance = 0;
+        uint32_t instanceCount = 0;
+    };
+    struct InstanceRange {
+        uint32_t firstInstance = 0;
+        uint32_t instanceCount = 0;
+    };
+
     struct RenderObject {
         GpuMesh mesh;
         glm::mat4 model{1.0f};
@@ -119,6 +140,10 @@ private:
         bool visible = true;
         bool castsShadow = true;  // drawn into the shadow map
         std::string name;
+        // Instances sorted by chunk; objects drawn once have a single chunk.
+        std::vector<InstanceChunk> chunks;
+        // This frame's main-pass draws: runs of consecutive visible chunks, merged into one draw each.
+        std::vector<InstanceRange> visibleRanges;
     };
 
     void createFrameResources();
@@ -134,6 +159,8 @@ private:
     glm::mat4 lightViewProj() const;
     // shadowPass: the caller has bound the shadow pipeline; otherwise pick mesh / foliage per object.
     void drawObjects(VkCommandBuffer cmd, bool shadowPass);
+    // Fills every object's visibleRanges for this frame's main pass.
+    void cullObjects(const glm::mat4& viewProj);
     void recordShadowPass(VkCommandBuffer cmd, VkDescriptorSet set);
     void recordMainPass(VkCommandBuffer cmd, VkDescriptorSet set);
     void recordCompositePass(VkCommandBuffer cmd, uint32_t imageIndex, VkDescriptorSet set);
@@ -170,6 +197,7 @@ private:
     float shadowRadius_ = 50.0f;
     bool swapchainDirty_ = false;  // window resized or present mode changed
     bool vsync_ = true;
+    glm::mat4 cullViewProj_{1.0f};  // the frustum culling tests against (held while freezeCulling)
 
     GpuProfiler profiler_;
     FrameStats stats_;

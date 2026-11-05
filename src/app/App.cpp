@@ -20,11 +20,13 @@ void App::run(const AppOptions& options) {
         Benchmark benchmark(options.benchmarkFrames, options.sceneRepeat, options.benchmarkCsv);
         init(false, options);
         renderer_.sceneRepeat = static_cast<uint32_t>(std::max(options.sceneRepeat, 1));
+        renderer_.frustumCulling = options.frustumCulling;
         ui_.visible = false;
         mainLoop(benchmark.totalFrames(), options.screenshotPath, &benchmark);
         benchmark.report();
     } else {
         init(options.vsync, options);
+        renderer_.frustumCulling = options.frustumCulling;
         mainLoop(options.maxFrames, options.screenshotPath, nullptr);
     }
     shutdown();

@@ -124,18 +124,58 @@ uint32_t Renderer::addObject(const MeshData& mesh, const glm::mat4& model, std::
     o.model = model;
     o.instances = identityInstance_;
     o.name = std::move(name);
+    Aabb local;
+    for (const Vertex& v : mesh.vertices) local.expand(v.position);
+    o.chunks.push_back({transformAabb(local, model), 0.0f, 0, 1});
     objects_.push_back(std::move(o));
     return static_cast<uint32_t>(objects_.size() - 1);
 }
 
 uint32_t Renderer::addInstanced(const MeshData& mesh, const std::vector<InstanceData>& instances, bool twoSided,
-                                std::string name) {
+                                std::string name, float chunkSize) {
     if (instances.empty()) throw std::runtime_error("addInstanced: no instances for " + name);
     const uint32_t index = addObject(mesh, glm::mat4(1.0f), std::move(name));
     RenderObject& o = objects_[index];
-    o.instances = uploadBuffer(*ctx_, instances.data(), instances.size() * sizeof(InstanceData),
+
+    // The mesh's extent around the instance origin. Instances turn about Y, so sideways it is the
+    // largest distance from the Y axis.
+    float radius = 0.0f, minY = 1e30f, maxY = -1e30f;
+    for (const Vertex& v : mesh.vertices) {
+        radius = std::max(radius, glm::length(glm::vec2(v.position.x, v.position.z)));
+        minY = std::min(minY, v.position.y);
+        maxY = std::max(maxY, v.position.y);
+    }
+
+    // Sort the instances by the square cell of the ground they stand on, row by row, so each chunk
+    // is one contiguous range of the instance buffer (drawn with firstInstance), and neighbouring
+    // chunks in a row are neighbouring ranges (so visible runs merge into one draw).
+    auto cellOf = [&](const InstanceData& d) {
+        return glm::ivec2(glm::floor(glm::vec2(d.positionScale.x, d.positionScale.z) / chunkSize));
+    };
+    std::vector<InstanceData> sorted = instances;
+    std::stable_sort(sorted.begin(), sorted.end(), [&](const InstanceData& a, const InstanceData& b) {
+        const glm::ivec2 ca = cellOf(a), cb = cellOf(b);
+        return ca.y != cb.y ? ca.y < cb.y : ca.x < cb.x;
+    });
+
+    o.chunks.clear();
+    for (uint32_t i = 0; i < sorted.size(); ++i) {
+        const InstanceData& d = sorted[i];
+        if (i == 0 || cellOf(d) != cellOf(sorted[i - 1])) o.chunks.push_back({{}, 0.0f, i, 0});
+        InstanceChunk& chunk = o.chunks.back();
+        ++chunk.instanceCount;
+        const glm::vec3 p{d.positionScale};
+        const float s = d.positionScale.w;
+        chunk.bounds.expand(p + glm::vec3(-radius * s, minY * s, -radius * s));
+        chunk.bounds.expand(p + glm::vec3(radius * s, maxY * s, radius * s));
+        // Matches InstanceToWorld in shaders/common.hlsli: sway = wind * y^2 * scale * gust, with
+        // |gust| <= 1.3 and a unit-length direction.
+        chunk.swayReach = std::max(chunk.swayReach, d.params.z * maxY * maxY * s * 1.3f);
+    }
+
+    o.instances = uploadBuffer(*ctx_, sorted.data(), sorted.size() * sizeof(InstanceData),
                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    o.instanceCount = static_cast<uint32_t>(instances.size());
+    o.instanceCount = static_cast<uint32_t>(sorted.size());
     o.ownsInstances = true;
     o.twoSided = twoSided;
     return index;
@@ -456,6 +496,8 @@ void Renderer::drawFrame(const Camera& camera) {
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
     const bool capture = !capturePath_.empty();
     stats_ = FrameStats{};
+    if (!freezeCulling) cullViewProj_ = uniforms.viewProj;
+    cullObjects(cullViewProj_);
     profiler_.reset(cmd, frameIndex_);
     profiler_.begin(cmd, frameIndex_, GpuScope::Frame);
 
@@ -533,11 +575,41 @@ void Renderer::drawFrame(const Camera& camera) {
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 }
 
+void Renderer::cullObjects(const glm::mat4& viewProj) {
+    const Frustum frustum = extractFrustum(viewProj);
+    for (RenderObject& o : objects_) {
+        o.visibleRanges.clear();
+        if (!o.visible) continue;
+        stats_.chunksTotal += static_cast<uint32_t>(o.chunks.size());
+        for (const InstanceChunk& c : o.chunks) {
+            if (frustumCulling) {
+                Aabb box = c.bounds;
+                const float sway = c.swayReach * windStrength;
+                box.min -= glm::vec3(sway, 0.0f, sway);
+                box.max += glm::vec3(sway, 0.0f, sway);
+                if (!intersects(frustum, box)) continue;
+            }
+            ++stats_.chunksVisible;
+            if (!o.visibleRanges.empty() &&
+                o.visibleRanges.back().firstInstance + o.visibleRanges.back().instanceCount == c.firstInstance) {
+                o.visibleRanges.back().instanceCount += c.instanceCount;
+            } else {
+                o.visibleRanges.push_back({c.firstInstance, c.instanceCount});
+            }
+        }
+    }
+}
+
 void Renderer::drawObjects(VkCommandBuffer cmd, bool shadowPass) {
     VkPipeline bound = VK_NULL_HANDLE;
     for (const RenderObject& o : objects_) {
         if (!o.visible) continue;
         if (shadowPass && !o.castsShadow) continue;
+        // The shadow pass draws everything for now (it sees the island from the sun, not the camera).
+        const InstanceRange all{0, o.instanceCount};
+        const InstanceRange* ranges = shadowPass ? &all : o.visibleRanges.data();
+        const size_t rangeCount = shadowPass ? 1 : o.visibleRanges.size();
+        if (rangeCount == 0) continue;
         if (!shadowPass) {
             VkPipeline wanted = o.twoSided ? foliagePipeline_ : meshPipeline_;
             if (wanted != bound) {
@@ -545,14 +617,17 @@ void Renderer::drawObjects(VkCommandBuffer cmd, bool shadowPass) {
                 bound = wanted;
             }
         }
-        ++stats_.drawCalls;
-        stats_.triangles += static_cast<uint64_t>(o.mesh.indexCount / 3) * o.instanceCount;
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &o.model);
         const VkBuffer buffers[] = {o.mesh.vertices.buffer, o.instances.buffer};
         const VkDeviceSize offsets[] = {0, 0};
         vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
         vkCmdBindIndexBuffer(cmd, o.mesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, o.mesh.indexCount, o.instanceCount, 0, 0, 0);
+        for (size_t r = 0; r < rangeCount; ++r) {
+            // firstInstance offsets where per-instance attributes are read from the instance buffer.
+            ++stats_.drawCalls;
+            stats_.triangles += static_cast<uint64_t>(o.mesh.indexCount / 3) * ranges[r].instanceCount;
+            vkCmdDrawIndexed(cmd, o.mesh.indexCount, ranges[r].instanceCount, 0, 0, ranges[r].firstInstance);
+        }
     }
 }
 

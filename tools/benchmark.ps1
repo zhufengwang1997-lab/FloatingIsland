@@ -51,7 +51,7 @@ for ($i = 0; $i -lt $cases.Count; $i++) {
 for ($r = 1; $r -le $Rounds; $r++) {
     for ($i = 0; $i -lt $cases.Count; $i++) {
         Write-Host "round $r/$($Rounds): $($cases[$i].Name)"
-        $arguments = @("--benchmark", "$frames") + $cases[$i].Flags
+        $arguments = @("--benchmark", "$frames", "--test-spheres") + $cases[$i].Flags
         $output = & $Exe @arguments 2>&1 | ForEach-Object { "$_" }
         foreach ($row in $rows) {
             $line = $output | Where-Object { $_.StartsWith($row) } | Select-Object -First 1

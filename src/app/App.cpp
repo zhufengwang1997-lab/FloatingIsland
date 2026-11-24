@@ -91,11 +91,12 @@ void App::loadScene(const AppOptions& options) {
         renderer_.objectCastsShadow(index) = castsShadow;
     }
 
-    // Material test spheres floating above the island: roughness 0.1 -> 0.9 from left to right,
-    // red plastic on the lower row, gold on the upper row.
+    // Material test spheres floating above the island (--test-spheres): roughness 0.1 -> 0.9 from left
+    // to right, red plastic on the lower row, gold on the upper row. Off by default; the numbers in
+    // docs/perf-log.md were measured with them, so tools/benchmark.* turn them on.
     const glm::vec3 plastic{0.80f, 0.12f, 0.10f};
     const glm::vec3 gold{1.00f, 0.78f, 0.34f};
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; options.testSpheres && i < 5; ++i) {
         const float roughness = 0.1f + 0.2f * static_cast<float>(i);
         const float x = -16.0f + 8.0f * static_cast<float>(i);
         renderer_.addObject(generateSphere(2.5f, 48, 24, plastic, roughness, 0.0f),

@@ -28,7 +28,7 @@ for ((r = 1; r <= rounds; ++r)); do
   for i in "${!names[@]}"; do
     echo "round $r/$rounds: ${names[$i]}" >&2
     # shellcheck disable=SC2086
-    "$exe" --benchmark "$frames" ${flags[$i]} > "$tmp/$i.$r.txt" 2>&1
+    "$exe" --benchmark "$frames" --test-spheres ${flags[$i]} > "$tmp/$i.$r.txt" 2>&1
   done
 done
 

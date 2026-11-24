@@ -26,6 +26,7 @@ struct AppOptions {
     bool dayCycle = false;       // let the time of day run by itself
     bool iblEveryFrame = false;  // remake the IBL cube maps every frame (to measure the update)
     bool grassShadows = false;   // draw grass into the shadow map (off by default; on for A/B tests)
+    bool testSpheres = false;    // the 10 PBR material test spheres above the island (perf-log data was taken with them)
 };
 
 // Owns the window and the main loop.

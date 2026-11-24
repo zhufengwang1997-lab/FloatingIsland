@@ -2,6 +2,8 @@
 
 一个从零实现的 Vulkan 1.3 渲染器，用一座浮空岛场景（实例化植被、云海、昼夜循环、基于天空的环境光照）验证渲染框架与性能优化。
 
+![浮岛](docs/images/island.jpg)
+
 ## 技术栈
 
 - C++17、CMake、Ninja
@@ -15,7 +17,7 @@
 | 平台 | 用途 |
 | --- | --- |
 | macOS（Apple M5 Max） | 主力开发 |
-| Windows（GTX 1070 Ti） | 测试、RenderDoc / Nsight 抓帧与性能分析；构建步骤见 `docs/windows.md` |
+| Windows（GTX 1070 Ti） | 测试、RenderDoc / Nsight 抓帧与性能分析；构建步骤见 `docs/windows.md`（代码已适配 Windows，实测数据尚未采集） |
 
 ## 构建
 
@@ -42,6 +44,7 @@ ninja -C build-release
 ./build-release/FloatingIsland --benchmark 1500 --no-clouds                         # 不画云海（用于对比云海的开销）
 ./build-release/FloatingIsland --benchmark 1500 --ibl-every-frame                   # 每帧重做 IBL 立方体贴图，测它的开销
 ./build/FloatingIsland --time 18 --day-cycle                                        # 从 18:00（日落）开始，时间自动流逝
+./build/FloatingIsland --test-spheres                                               # 显示岛上方的 10 个 PBR 材质测试球（perf-log 的数据含这些球，测试脚本会自动打开）
 tools/benchmark.sh                                                                  # 标准测试集：5 项 × 3 轮，输出 Markdown 表格（Windows 用 tools/benchmark.ps1）
 ```
 
@@ -90,4 +93,3 @@ export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
 
 - 性能优化记录：`docs/perf-log.md`
 - Windows 构建与测试：`docs/windows.md`
-- 学习笔记（第 1–20 步的概念和对应代码）：Claude Docs 上的《浮岛》学习笔记

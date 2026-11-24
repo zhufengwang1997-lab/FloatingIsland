@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--time") == 0 && hasValue) options.timeOfDay = std::strtof(argv[++i], nullptr);
         else if (std::strcmp(argv[i], "--day-cycle") == 0) options.dayCycle = true;
         else if (std::strcmp(argv[i], "--ibl-every-frame") == 0) options.iblEveryFrame = true;
+        else if (std::strcmp(argv[i], "--test-spheres") == 0) options.testSpheres = true;
         else std::fprintf(stderr, "Ignoring unknown argument %s\n", argv[i]);
     }
     try {

@@ -1,5 +1,7 @@
 #include "renderer/Renderer.h"
 
+#include "app/Paths.h"
+
 #include "rhi/Pipeline.h"
 #include "rhi/VkCheck.h"
 #include "rhi/VulkanContext.h"
@@ -110,7 +112,7 @@ void Renderer::init(VulkanContext& ctx, GLFWwindow* window) {
     createIblDescriptors();
     writeHdrDescriptors();
     // Pipelines compile their shaders for this GPU; the cache from the last run lets them skip that.
-    pipelineCache_.init(ctx.device, ctx.physicalDevice, FI_SHADER_DIR "/../pipeline_cache.bin");
+    pipelineCache_.init(ctx.device, ctx.physicalDevice, pipelineCachePath());
     const auto pipelinesStart = std::chrono::steady_clock::now();
     createPipelines();
     const double pipelineMs =
@@ -591,8 +593,8 @@ void Renderer::createPipelines() {
     const VkVertexInputAttributeDescription instanceParams{5, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
                                                            offsetof(InstanceData, params)};
 
-    VkShaderModule meshVs = loadShaderModule(device, FI_SHADER_DIR "/mesh.vs.spv");
-    VkShaderModule meshPs = loadShaderModule(device, FI_SHADER_DIR "/mesh.ps.spv");
+    VkShaderModule meshVs = loadShaderModule(device, shaderDir() + "/mesh.vs.spv");
+    VkShaderModule meshPs = loadShaderModule(device, shaderDir() + "/mesh.ps.spv");
     GraphicsPipelineBuilder mesh;
     mesh.stage(VK_SHADER_STAGE_VERTEX_BIT, meshVs, "VSMain")
         .stage(VK_SHADER_STAGE_FRAGMENT_BIT, meshPs, "PSMain")
@@ -616,7 +618,7 @@ void Renderer::createPipelines() {
     // Shadow pass: positions only, depth only. The light projection has no Y flip, so faces wind the
     // other way on screen; culling is off anyway, and the depth bias pushes depths back to avoid
     // surfaces shadowing themselves ("shadow acne").
-    VkShaderModule shadowVs = loadShaderModule(device, FI_SHADER_DIR "/shadow.vs.spv");
+    VkShaderModule shadowVs = loadShaderModule(device, shaderDir() + "/shadow.vs.spv");
     shadowPipeline_ = GraphicsPipelineBuilder()
                           .stage(VK_SHADER_STAGE_VERTEX_BIT, shadowVs, "VSMain")
                           .vertexInput(bindings, {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
@@ -631,8 +633,8 @@ void Renderer::createPipelines() {
     vkDestroyShaderModule(device, shadowVs, nullptr);
 
     // Composite: fullscreen triangle generated from the vertex index, no depth, no culling.
-    VkShaderModule compositeVs = loadShaderModule(device, FI_SHADER_DIR "/composite.vs.spv");
-    VkShaderModule compositePs = loadShaderModule(device, FI_SHADER_DIR "/composite.ps.spv");
+    VkShaderModule compositeVs = loadShaderModule(device, shaderDir() + "/composite.vs.spv");
+    VkShaderModule compositePs = loadShaderModule(device, shaderDir() + "/composite.ps.spv");
     compositePipeline_ = GraphicsPipelineBuilder()
                              .stage(VK_SHADER_STAGE_VERTEX_BIT, compositeVs, "VSMain")
                              .stage(VK_SHADER_STAGE_FRAGMENT_BIT, compositePs, "PSMain")
@@ -645,8 +647,8 @@ void Renderer::createPipelines() {
     vkDestroyShaderModule(device, compositePs, nullptr);
 
     // Sea of clouds: a quad generated from the vertex index, depth tested like the scene.
-    VkShaderModule cloudsVs = loadShaderModule(device, FI_SHADER_DIR "/clouds.vs.spv");
-    VkShaderModule cloudsPs = loadShaderModule(device, FI_SHADER_DIR "/clouds.ps.spv");
+    VkShaderModule cloudsVs = loadShaderModule(device, shaderDir() + "/clouds.vs.spv");
+    VkShaderModule cloudsPs = loadShaderModule(device, shaderDir() + "/clouds.ps.spv");
     cloudPipeline_ = GraphicsPipelineBuilder()
                          .stage(VK_SHADER_STAGE_VERTEX_BIT, cloudsVs, "VSMain")
                          .stage(VK_SHADER_STAGE_FRAGMENT_BIT, cloudsPs, "PSMain")
@@ -667,7 +669,7 @@ void Renderer::createPipelines() {
     iblLayoutInfo.pPushConstantRanges = &iblPush;
     VK_CHECK(vkCreatePipelineLayout(device, &iblLayoutInfo, nullptr, &iblPipelineLayout_));
     auto compute = [&](const char* file, const char* entry) {
-        VkShaderModule module = loadShaderModule(device, std::string(FI_SHADER_DIR "/") + file);
+        VkShaderModule module = loadShaderModule(device, shaderDir() + "/" + file);
         VkPipeline pipeline = buildComputePipeline(device, module, entry, iblPipelineLayout_, pipelineCache_.handle());
         vkDestroyShaderModule(device, module, nullptr);
         return pipeline;

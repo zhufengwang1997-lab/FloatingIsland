@@ -20,3 +20,4 @@ xcuserdata/
 *.gputrace/
 *.nsight-gfxproj
 *.ngfx-capture
+dist/

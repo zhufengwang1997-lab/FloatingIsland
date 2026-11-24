@@ -250,7 +250,7 @@ private:
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;
     VkPipeline cloudPipeline_ = VK_NULL_HANDLE;  // the sea of clouds below the island
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
-    PipelineCache pipelineCache_;  // build/pipeline_cache.bin
+    PipelineCache pipelineCache_;  // build/pipeline_cache.bin (packaged copies: temp dir, see app/Paths.h)
 
     Image envCube_;         // the sky's radiance
     Image specularCube_;    // envCube_ prefiltered for roughness 0..1, one roughness per mip

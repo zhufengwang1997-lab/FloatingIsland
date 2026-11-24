@@ -4,6 +4,21 @@
 
 ![浮岛](docs/images/island.jpg)
 
+## 下载运行（不需要编译）
+
+到本仓库的 [Releases](../../releases) 下载：
+
+- **macOS**（Apple 芯片，macOS 13 及以上）：`FloatingIsland-mac.zip`。解压后，因为包没有经过 Apple 公证，第一次运行前在终端执行一次：
+
+  ```bash
+  xattr -dr com.apple.quarantine FloatingIsland.app
+  ```
+
+  然后双击打开。包内自带 MoltenVK，不需要安装 Vulkan SDK。
+- **Windows**（x64，需要支持 Vulkan 1.3 的显卡驱动）：`FloatingIsland-windows.zip`，解压后运行 `FloatingIsland.exe`（会同时打开一个控制台窗口显示日志）。这个包是在 Mac 上用 mingw-w64 交叉编译的，**还没有在 Windows 真机上运行过**；原生 MSVC 构建见 `docs/windows.md`。
+
+操作：按住鼠标右键转视角，WASD 移动，E / Q 上升 / 下降，按住 Shift 加速；`H` 显示 / 隐藏调试面板（各 Pass 的 GPU 耗时、剔除 / LOD / 云海开关、昼夜时间等），Esc 退出。命令行参数与下文“构建”一节相同，例如 `--time 18 --day-cycle` 从日落开始让时间流逝。
+
 ## 技术栈
 
 - C++17、CMake、Ninja
@@ -56,6 +71,13 @@ macOS 上用 Homebrew 安装的验证层时，需要让动态库加载器能找�
 
 ```bash
 export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:/usr/lib"
+```
+
+打包（生成上面 Releases 里的两个 zip，输出到 `dist/`）：
+
+```bash
+tools/package_mac.sh        # 自带 MoltenVK 的 .app，最低 macOS 13（GLFW / GLM 从源码静态链接）
+tools/package_windows.sh    # 在 Mac 上用 mingw-w64 交叉编译 Windows x64：exe + shaders，C++ 运行库静态链接
 ```
 
 ## 代码结构
